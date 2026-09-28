@@ -1,0 +1,6 @@
+{
+  "name": "MEAN InvestmentStockTracker",
+  "description": "Real-time investment and stock portfolio tracking platform integrated with Google Sheets InvestmentStockTracker database with join keys, live transactions, and analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

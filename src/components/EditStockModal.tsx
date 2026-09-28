@@ -1,0 +1,914 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Edit3, 
+  X, 
+  CheckCircle2, 
+  Sliders, 
+  ShoppingCart, 
+  TrendingDown, 
+  Calendar, 
+  DollarSign, 
+  Layers, 
+  ArrowUpRight,
+  Clock,
+  Inbox
+} from 'lucide-react';
+import { 
+  Stock, 
+  Industry, 
+  Purchase, 
+  Sale, 
+  EnrichedPurchase, 
+  EnrichedSale, 
+  deriveExchangeFromMktSymbol, 
+  formatINR 
+} from '../types/database';
+import { EditPurchaseModal } from './EditPurchaseModal';
+import { EditSaleModal } from './EditSaleModal';
+
+interface EditStockModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  stock: Stock | null;
+  industries: Industry[];
+  purchases?: (Purchase | EnrichedPurchase)[];
+  sales?: (Sale | EnrichedSale)[];
+  stocks?: Stock[];
+  onSave: (updatedStock: Stock) => Promise<void>;
+  onUpdatePurchase?: (updatedPurchase: Purchase) => Promise<void>;
+  onUpdateSale?: (updatedSale: Sale) => Promise<void>;
+}
+
+export const EditStockModal: React.FC<EditStockModalProps> = ({
+  isOpen,
+  onClose,
+  stock,
+  industries,
+  purchases = [],
+  sales = [],
+  stocks = [],
+  onSave,
+  onUpdatePurchase,
+  onUpdateSale,
+}) => {
+  const [activeTab, setActiveTab] = useState<'details' | 'purchases' | 'sales'>('details');
+
+  // Stock edit fields
+  const [symbol, setSymbol] = useState('');
+  const [mktSymbol, setMktSymbol] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [industryId, setIndustryId] = useState('');
+  const [dividendYield, setDividendYield] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sub-modal states for editing purchase and sale
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
+  const [isEditPurchaseOpen, setIsEditPurchaseOpen] = useState(false);
+
+  const [editingSale, setEditingSale] = useState<(Sale & Partial<EnrichedSale>) | null>(null);
+  const [isEditSaleOpen, setIsEditSaleOpen] = useState(false);
+
+  useEffect(() => {
+    if (stock) {
+      setSymbol(stock.Symbol);
+      setMktSymbol(stock.MktSymbol || `${stock.Symbol}.${stock.Exchange || 'NSE'}`);
+      setCompanyName(stock.CompanyName);
+      setIndustryId(stock.IndustryId || industries[0]?.IndustryId || 'IND0002');
+      setDividendYield((stock.DividendYield || 0).toString());
+    }
+  }, [stock, industries, isOpen]);
+
+  // Reset tab to details when opening new stock
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab('details');
+    }
+  }, [isOpen, stock?.StockId]);
+
+  if (!isOpen || !stock) return null;
+
+  // Filter purchases for this stock
+  const stockPurchases = purchases.filter(
+    p => p.StockId.trim().toUpperCase() === stock.StockId.trim().toUpperCase()
+  );
+  const sortedPurchases = [...stockPurchases].sort(
+    (a, b) => new Date(b.PurchaseDate).getTime() - new Date(a.PurchaseDate).getTime()
+  );
+
+  // Filter sales for this stock (either by StockId directly or by matching PurchaseId of this stock)
+  const stockSales = sales.filter(s => {
+    if (s.StockId && s.StockId.trim().toUpperCase() === stock.StockId.trim().toUpperCase()) {
+      return true;
+    }
+    const linkedP = purchases.find(
+      p => p.PurchaseId.trim().toUpperCase() === (s.PurchaseId || '').trim().toUpperCase()
+    );
+    return linkedP && linkedP.StockId.trim().toUpperCase() === stock.StockId.trim().toUpperCase();
+  });
+  const sortedSales = [...stockSales].sort(
+    (a, b) => new Date(b.SaleDate).getTime() - new Date(a.SaleDate).getTime()
+  );
+
+  // Purchase summary metrics
+  const totalPurchasedQty = sortedPurchases.reduce((acc, p) => acc + (Number(p.Quantity) || 0), 0);
+  const totalInvested = sortedPurchases.reduce(
+    (acc, p) => acc + (Number(p.TotalAmount) || (Number(p.Quantity) * Number(p.PurchasePrice))),
+    0
+  );
+  const avgBuyPrice = totalPurchasedQty > 0 ? totalInvested / totalPurchasedQty : 0;
+
+  // Sales summary metrics
+  const totalSoldQty = sortedSales.reduce((acc, s) => acc + (Number(s.Quantity) || 0), 0);
+  const totalSaleProceeds = sortedSales.reduce(
+    (acc, s) => acc + (Number(s.TotalAmount) || (Number(s.Quantity) * Number(s.SalePrice || s.Rate || 0))),
+    0
+  );
+
+  // Dynamically compute derived exchange as user edits MktSymbol or Symbol
+  const derivedExchange = deriveExchangeFromMktSymbol(mktSymbol, symbol);
+
+  const handleSymbolChange = (newSym: string) => {
+    const upper = newSym.toUpperCase();
+    setSymbol(upper);
+    if (!mktSymbol || mktSymbol.startsWith(symbol)) {
+      setMktSymbol(`${upper}.${derivedExchange || 'NSE'}`);
+    }
+  };
+
+  const handleSaveStock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!symbol.trim() || !companyName.trim() || isSaving) return;
+
+    setIsSaving(true);
+    try {
+      const updatedStock: Stock = {
+        ...stock,
+        Symbol: symbol.toUpperCase().trim(),
+        MktSymbol: mktSymbol.toUpperCase().trim(),
+        CompanyName: companyName.trim(),
+        IndustryId: industryId || 'IND0002',
+        Exchange: derivedExchange,
+        Liverate: stock.Liverate,
+        CurrentPrice: stock.Liverate || stock.CurrentPrice,
+        DividendYield: parseFloat(dividendYield) || 0,
+        LastUpdated: new Date().toISOString(),
+      };
+
+      await onSave(updatedStock);
+      onClose();
+    } catch (err) {
+      console.error('Error saving stock:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Open edit purchase modal on click of date or edit button
+  const handleOpenPurchaseEdit = (purchase: Purchase) => {
+    setEditingPurchase(purchase);
+    setIsEditPurchaseOpen(true);
+  };
+
+  // Open edit sale modal on click of date or edit button
+  const handleOpenSaleEdit = (sale: Sale) => {
+    setEditingSale(sale);
+    setIsEditSaleOpen(true);
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-150">
+        <div className="w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-t-3xl sm:rounded-2xl shadow-2xl p-0 relative max-h-[92vh] flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 sm:p-6 pb-3 border-b border-slate-800 shrink-0 bg-slate-900/60">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl shrink-0">
+                <Edit3 className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                  <span>Edit Stock: {stock.Symbol}</span>
+                  <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
+                    {stock.StockId}
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400">
+                  {stock.CompanyName} • {stock.Exchange || derivedExchange}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              disabled={isSaving}
+              className="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Navigation Tabs */}
+          <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 sm:px-6 pt-2 shrink-0 bg-slate-950/40 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setActiveTab('details')}
+              className={`px-3.5 py-2.5 text-xs font-semibold rounded-t-xl transition flex items-center gap-2 border-b-2 cursor-pointer touch-manipulation min-h-[40px] whitespace-nowrap ${
+                activeTab === 'details'
+                  ? 'text-cyan-400 border-cyan-400 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Stock Details</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('purchases')}
+              className={`px-3.5 py-2.5 text-xs font-semibold rounded-t-xl transition flex items-center gap-2 border-b-2 cursor-pointer touch-manipulation min-h-[40px] whitespace-nowrap ${
+                activeTab === 'purchases'
+                  ? 'text-amber-400 border-amber-400 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <ShoppingCart className="w-3.5 h-3.5" />
+              <span>Purchases</span>
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
+                  activeTab === 'purchases'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {sortedPurchases.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('sales')}
+              className={`px-3.5 py-2.5 text-xs font-semibold rounded-t-xl transition flex items-center gap-2 border-b-2 cursor-pointer touch-manipulation min-h-[40px] whitespace-nowrap ${
+                activeTab === 'sales'
+                  ? 'text-emerald-400 border-emerald-400 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <TrendingDown className="w-3.5 h-3.5" />
+              <span>Sales</span>
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
+                  activeTab === 'sales'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {sortedSales.length}
+              </span>
+            </button>
+          </div>
+
+          {/* TAB 1: Stock Details */}
+          {activeTab === 'details' && (
+            <form onSubmit={handleSaveStock} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Stock ID
+                  </label>
+                  <div className="w-full min-h-[44px] bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5 text-base sm:text-sm font-mono font-bold text-slate-400 cursor-not-allowed flex items-center">
+                    {stock.StockId}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Symbol
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={symbol}
+                    onChange={e => handleSymbolChange(e.target.value)}
+                    placeholder="e.g. RELIANCE"
+                    className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-bold uppercase focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Market Ticker
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={mktSymbol}
+                    onChange={e => setMktSymbol(e.target.value.toUpperCase())}
+                    placeholder="e.g. RELIANCE.NSE"
+                    className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-mono uppercase focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Exchange
+                  </label>
+                  <div className="w-full min-h-[44px] bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5 text-base sm:text-sm font-mono font-bold text-amber-300 flex items-center justify-between">
+                    <span>{derivedExchange}</span>
+                    <span className="text-xs font-normal text-slate-400 font-sans">Market</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Company Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={companyName}
+                  onChange={e => setCompanyName(e.target.value)}
+                  placeholder="e.g. Reliance Industries Ltd."
+                  className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              {/* Industry dropdown */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Industry Sector
+                </label>
+                <select
+                  value={industryId}
+                  onChange={e => setIndustryId(e.target.value)}
+                  className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-cyan-500"
+                >
+                  {industries.map((ind, idx) => (
+                    <option key={`${ind.IndustryId}_${idx}`} value={ind.IndustryId}>
+                      {ind.Name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Live Price display */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Live Market Price (₹ INR)
+                </label>
+                <div className="w-full min-h-[44px] bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 flex items-center justify-between cursor-not-allowed">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-base font-mono font-bold text-emerald-400">
+                      {formatINR(stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice)}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-400 font-normal">
+                    Live Rate
+                  </span>
+                </div>
+              </div>
+
+              {/* Market Key Metrics */}
+              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                <div className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                  Market Snapshot
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">52Wk High</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.High52 ? formatINR(stock.High52) : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">52Wk Low</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.Low52 ? formatINR(stock.Low52) : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Close Yesterday</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.CloseYest ? formatINR(stock.CloseYest) : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Day Change</div>
+                    <div
+                      className={`font-mono font-semibold mt-0.5 ${
+                        stock.ChangePct !== undefined
+                          ? stock.ChangePct >= 0
+                            ? 'text-emerald-400'
+                            : 'text-rose-400'
+                          : 'text-slate-200'
+                      }`}
+                    >
+                      {stock.ChangePct !== undefined
+                        ? `${stock.ChangePct >= 0 ? '+' : ''}${stock.ChangePct.toFixed(2)}%`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">P/E Ratio</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.Pe ? stock.Pe.toFixed(2) : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">EPS</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.Eps ? formatINR(stock.Eps) : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Volume</div>
+                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                      {stock.Volume ? stock.Volume.toLocaleString() : '—'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <div className="text-[10px] text-slate-400">Dividend Yield</div>
+                    <div className="font-mono font-semibold text-cyan-400 mt-0.5">
+                      {stock.DividendYield !== undefined ? `${stock.DividendYield}%` : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Dividend Yield (%)
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={dividendYield}
+                  onChange={e => setDividendYield(e.target.value)}
+                  placeholder="0.35"
+                  className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-mono focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isSaving}
+                  className="px-4 py-2.5 min-h-[44px] text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition cursor-pointer touch-manipulation"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="px-5 py-2.5 min-h-[44px] text-xs font-bold rounded-xl text-white bg-cyan-600 hover:bg-cyan-500 shadow-lg shadow-cyan-950/40 transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer touch-manipulation"
+                >
+                  {isSaving ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-cyan-200" />
+                      <span>Save Changes</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* TAB 2: Purchases List with Date, Price, Quantity */}
+          {activeTab === 'purchases' && (
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+              {/* Purchases Metric Bar */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs">
+                <div>
+                  <div className="text-[10px] text-slate-400">Total Purchased</div>
+                  <div className="font-mono font-bold text-white text-sm mt-0.5">
+                    {totalPurchasedQty.toLocaleString()} shares
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400">Total Invested</div>
+                  <div className="font-mono font-bold text-amber-400 text-sm mt-0.5">
+                    {formatINR(totalInvested)}
+                  </div>
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <div className="text-[10px] text-slate-400">Avg. Purchase Price</div>
+                  <div className="font-mono font-bold text-slate-200 text-sm mt-0.5">
+                    {formatINR(avgBuyPrice)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Informational notice */}
+              <div className="text-xs text-slate-400 flex items-center justify-between">
+                <span>All purchases for <strong className="text-white font-mono">{stock.Symbol}</strong></span>
+                <span className="text-[11px] text-cyan-400">💡 Click any date to edit purchase</span>
+              </div>
+
+              {sortedPurchases.length === 0 ? (
+                <div className="p-8 text-center bg-slate-950/40 rounded-2xl border border-dashed border-slate-800 space-y-2">
+                  <Inbox className="w-8 h-8 text-slate-500 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-300">No purchases recorded yet</p>
+                  <p className="text-xs text-slate-500">
+                    There are no buy transactions for {stock.Symbol} in the portfolio.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop Table View */}
+                  <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px] tracking-wider">
+                        <tr>
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Price</th>
+                          <th className="py-3 px-4">Quantity</th>
+                          <th className="py-3 px-4">Total Amount</th>
+                          <th className="py-3 px-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-sans">
+                        {sortedPurchases.map((p, idx) => {
+                          const dateObj = new Date(p.PurchaseDate);
+                          const dateStr = !isNaN(dateObj.getTime())
+                            ? dateObj.toLocaleDateString(undefined, {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                              })
+                            : p.PurchaseDate;
+                          const timeStr = !isNaN(dateObj.getTime())
+                            ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                            : '';
+
+                          return (
+                            <tr
+                              key={`${p.PurchaseId}_${idx}`}
+                              className="hover:bg-slate-800/40 transition group"
+                            >
+                              {/* Clickable Date Column - Opens Purchase in Edit Mode */}
+                              <td className="py-3 px-4">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenPurchaseEdit(p)}
+                                  className="text-cyan-400 hover:text-cyan-300 font-semibold underline underline-offset-4 decoration-cyan-500/40 hover:decoration-cyan-400 flex flex-col items-start cursor-pointer text-left transition group-hover:text-cyan-300"
+                                  title={`Click to edit purchase ${p.PurchaseId}`}
+                                >
+                                  <span className="flex items-center gap-1.5 font-medium">
+                                    <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                    <span>{dateStr}</span>
+                                  </span>
+                                  {timeStr && (
+                                    <span className="text-[10px] text-slate-500 font-mono pl-5">
+                                      {timeStr} • {p.PurchaseId}
+                                    </span>
+                                  )}
+                                </button>
+                              </td>
+
+                              {/* Price */}
+                              <td className="py-3 px-4 font-mono font-semibold text-slate-200 text-sm">
+                                {formatINR(p.PurchasePrice)}
+                              </td>
+
+                              {/* Quantity */}
+                              <td className="py-3 px-4 font-mono font-bold text-white text-sm">
+                                {p.Quantity.toLocaleString()}
+                              </td>
+
+                              {/* Total Amount */}
+                              <td className="py-3 px-4 font-mono font-semibold text-emerald-400">
+                                {formatINR(p.TotalAmount || p.Quantity * p.PurchasePrice)}
+                              </td>
+
+                              {/* Edit Action Button */}
+                              <td className="py-3 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenPurchaseEdit(p)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 hover:bg-cyan-900/60 hover:border-cyan-600 transition cursor-pointer"
+                                  title="Edit purchase record"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Card View */}
+                  <div className="block sm:hidden space-y-2.5">
+                    {sortedPurchases.map((p, idx) => {
+                      const dateObj = new Date(p.PurchaseDate);
+                      const dateStr = !isNaN(dateObj.getTime())
+                        ? dateObj.toLocaleDateString(undefined, {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })
+                        : p.PurchaseDate;
+
+                      return (
+                        <div
+                          key={`m_purchase_${p.PurchaseId}_${idx}`}
+                          className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            {/* Clickable Date Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPurchaseEdit(p)}
+                              className="text-cyan-400 hover:text-cyan-300 font-semibold underline underline-offset-4 decoration-cyan-500/40 flex items-center gap-1.5 cursor-pointer text-sm text-left"
+                            >
+                              <Calendar className="w-4 h-4 text-cyan-400" />
+                              <span>{dateStr}</span>
+                            </button>
+                            <span className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                              {p.PurchaseId}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-900">
+                            <div>
+                              <div className="text-[10px] text-slate-400">Price</div>
+                              <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                                {formatINR(p.PurchasePrice)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-slate-400">Quantity</div>
+                              <div className="font-mono font-bold text-white mt-0.5">
+                                {p.Quantity.toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-slate-400">Total</div>
+                              <div className="font-mono font-semibold text-emerald-400 mt-0.5">
+                                {formatINR(p.TotalAmount || p.Quantity * p.PurchasePrice)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPurchaseEdit(p)}
+                              className="w-full min-h-[40px] flex items-center justify-center gap-1.5 text-xs font-semibold text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 rounded-lg hover:bg-cyan-900/60 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit Purchase Lot</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: Sales List with Date, Price, Quantity */}
+          {activeTab === 'sales' && (
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+              {/* Sales Metric Bar */}
+              <div className="grid grid-cols-2 gap-2.5 p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs">
+                <div>
+                  <div className="text-[10px] text-slate-400">Total Shares Sold</div>
+                  <div className="font-mono font-bold text-white text-sm mt-0.5">
+                    {totalSoldQty.toLocaleString()} shares
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400">Total Sales Proceeds</div>
+                  <div className="font-mono font-bold text-emerald-400 text-sm mt-0.5">
+                    {formatINR(totalSaleProceeds)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Informational notice */}
+              <div className="text-xs text-slate-400 flex items-center justify-between">
+                <span>All sales for <strong className="text-white font-mono">{stock.Symbol}</strong></span>
+                <span className="text-[11px] text-amber-400">💡 Click any date to edit sale</span>
+              </div>
+
+              {sortedSales.length === 0 ? (
+                <div className="p-8 text-center bg-slate-950/40 rounded-2xl border border-dashed border-slate-800 space-y-2">
+                  <Inbox className="w-8 h-8 text-slate-500 mx-auto" />
+                  <p className="text-sm font-semibold text-slate-300">No sales recorded yet</p>
+                  <p className="text-xs text-slate-500">
+                    No shares have been sold from {stock.Symbol} lots yet.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop Table View */}
+                  <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px] tracking-wider">
+                        <tr>
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Price</th>
+                          <th className="py-3 px-4">Quantity</th>
+                          <th className="py-3 px-4">Total Amount</th>
+                          <th className="py-3 px-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-sans">
+                        {sortedSales.map((s, idx) => {
+                          const dateObj = new Date(s.SaleDate);
+                          const dateStr = !isNaN(dateObj.getTime())
+                            ? dateObj.toLocaleDateString(undefined, {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                              })
+                            : s.SaleDate;
+                          const timeStr = !isNaN(dateObj.getTime())
+                            ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                            : '';
+
+                          const activeSaleId = s.SaleId || s.SalesId;
+                          const saleRate = s.SalePrice || s.Rate || 0;
+                          const totalVal = s.TotalAmount || s.Quantity * saleRate;
+
+                          return (
+                            <tr
+                              key={`${activeSaleId}_${idx}`}
+                              className="hover:bg-slate-800/40 transition group"
+                            >
+                              {/* Clickable Date Column - Opens Sale in Edit Mode */}
+                              <td className="py-3 px-4">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenSaleEdit(s)}
+                                  className="text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-4 decoration-amber-500/40 hover:decoration-amber-400 flex flex-col items-start cursor-pointer text-left transition group-hover:text-amber-300"
+                                  title={`Click to edit sale ${activeSaleId}`}
+                                >
+                                  <span className="flex items-center gap-1.5 font-medium">
+                                    <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                    <span>{dateStr}</span>
+                                  </span>
+                                  {timeStr && (
+                                    <span className="text-[10px] text-slate-500 font-mono pl-5">
+                                      {timeStr} • {activeSaleId}
+                                    </span>
+                                  )}
+                                </button>
+                              </td>
+
+                              {/* Price */}
+                              <td className="py-3 px-4 font-mono font-semibold text-slate-200 text-sm">
+                                {formatINR(saleRate)}
+                              </td>
+
+                              {/* Quantity */}
+                              <td className="py-3 px-4 font-mono font-bold text-white text-sm">
+                                {s.Quantity.toLocaleString()}
+                              </td>
+
+                              {/* Total Amount */}
+                              <td className="py-3 px-4 font-mono font-semibold text-emerald-400">
+                                {formatINR(totalVal)}
+                              </td>
+
+                              {/* Edit Action Button */}
+                              <td className="py-3 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenSaleEdit(s)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-800/60 hover:bg-amber-900/60 hover:border-amber-600 transition cursor-pointer"
+                                  title="Edit sale record"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Card View */}
+                  <div className="block sm:hidden space-y-2.5">
+                    {sortedSales.map((s, idx) => {
+                      const dateObj = new Date(s.SaleDate);
+                      const dateStr = !isNaN(dateObj.getTime())
+                        ? dateObj.toLocaleDateString(undefined, {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })
+                        : s.SaleDate;
+                      const activeSaleId = s.SaleId || s.SalesId;
+                      const saleRate = s.SalePrice || s.Rate || 0;
+                      const totalVal = s.TotalAmount || s.Quantity * saleRate;
+
+                      return (
+                        <div
+                          key={`m_sale_${activeSaleId}_${idx}`}
+                          className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            {/* Clickable Date Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaleEdit(s)}
+                              className="text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-4 decoration-amber-500/40 flex items-center gap-1.5 cursor-pointer text-sm text-left"
+                            >
+                              <Calendar className="w-4 h-4 text-amber-400" />
+                              <span>{dateStr}</span>
+                            </button>
+                            <span className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                              {activeSaleId}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-900">
+                            <div>
+                              <div className="text-[10px] text-slate-400">Price</div>
+                              <div className="font-mono font-semibold text-slate-200 mt-0.5">
+                                {formatINR(saleRate)}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-slate-400">Quantity</div>
+                              <div className="font-mono font-bold text-white mt-0.5">
+                                {s.Quantity.toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] text-slate-400">Total</div>
+                              <div className="font-mono font-semibold text-emerald-400 mt-0.5">
+                                {formatINR(totalVal)}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaleEdit(s)}
+                              className="w-full min-h-[40px] flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-800/60 rounded-lg hover:bg-amber-900/60 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit Sale Record</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Sub-modal: Edit Purchase Form */}
+      {isEditPurchaseOpen && editingPurchase && onUpdatePurchase && (
+        <EditPurchaseModal
+          isOpen={isEditPurchaseOpen}
+          onClose={() => {
+            setIsEditPurchaseOpen(false);
+            setEditingPurchase(null);
+          }}
+          purchase={editingPurchase}
+          stocks={stocks}
+          sales={sales}
+          onUpdatePurchase={onUpdatePurchase}
+        />
+      )}
+
+      {/* Sub-modal: Edit Sale Form */}
+      {isEditSaleOpen && editingSale && onUpdateSale && (
+        <EditSaleModal
+          isOpen={isEditSaleOpen}
+          onClose={() => {
+            setIsEditSaleOpen(false);
+            setEditingSale(null);
+          }}
+          sale={editingSale}
+          purchases={purchases}
+          stocks={stocks}
+          allSales={sales}
+          onUpdateSale={onUpdateSale}
+        />
+      )}
+    </>
+  );
+};
