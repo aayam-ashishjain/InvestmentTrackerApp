@@ -10,7 +10,9 @@ import {
   generatePurchaseId,
   generateSaleId,
   deriveExchangeFromMktSymbol,
-  DEFAULT_INDUSTRIES
+  DEFAULT_INDUSTRIES,
+  formatDateOnly,
+  getTodayDateOnly
 } from '../types/database';
 
 export const TRACKER_SPREADSHEET_NAME = 'InvestmentStockTracker';
@@ -334,7 +336,7 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
       Pe: parseNumericValue(s.pe) ?? parseNumericValue(s.Pe) ?? parseNumericValue(s.PE),
       Currency: s.Currency || 'INR',
       DividendYield: parseFloat(s.DividendYield) || 0,
-      LastUpdated: s.LastUpdated || new Date().toISOString(),
+      LastUpdated: formatDateOnly(s.LastUpdated),
     };
   });
 
@@ -364,7 +366,7 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
   const parsedPurchases: Purchase[] = rawPurchases.map((p: any, idx: number) => ({
     PurchaseId: (p.PurchaseId || `Pur${String(idx + 1).padStart(8, '0')}`).toString().trim(),
     StockId: (p.StockId || '').toString().trim(),
-    PurchaseDate: p.PurchaseDate || new Date().toISOString(),
+    PurchaseDate: formatDateOnly(p.PurchaseDate),
     Quantity: parseFloat(p.Quantity) || 0,
     PurchasePrice: parseFloat(p.PurchasePrice) || 0,
     TotalAmount: parseFloat(p.TotalAmount) || (parseFloat(p.Quantity) * parseFloat(p.PurchasePrice)) || 0,
@@ -396,7 +398,7 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
       SalesId: saleId,
       PurchaseId: rawPurchaseId,
       StockId: rawStockId,
-      SaleDate: s.SaleDate || s.salesdate || s.Date || new Date().toISOString(),
+      SaleDate: formatDateOnly(s.SaleDate || s.salesdate || s.Date),
       Quantity: parseFloat(s.Quantity || s.qty || s.shares) || 0,
       SalePrice: saleRate,
       Rate: saleRate,
@@ -645,7 +647,7 @@ export async function executePurchaseTransaction(
   existingPurchases: Purchase[]
 ): Promise<{ success: boolean; purchaseId: string; newPurchase: Purchase }> {
   const purchaseId = generatePurchaseId(existingPurchases);
-  const purchaseDate = purchaseInput.PurchaseDate || new Date().toISOString();
+  const purchaseDate = formatDateOnly(purchaseInput.PurchaseDate);
 
   const newPurchase: Purchase = {
     PurchaseId: purchaseId,
@@ -777,7 +779,7 @@ export async function executeSaleTransaction(
     ? passedId
     : autogenSaleId;
 
-  const saleDate = saleInput.SaleDate || new Date().toISOString();
+  const saleDate = formatDateOnly(saleInput.SaleDate);
   const rateValue = saleInput.Rate !== undefined ? saleInput.Rate : saleInput.SalePrice;
 
   const newSale: Sale = {
@@ -917,7 +919,7 @@ export async function updateSaleTransaction(
   if (colIndices['salesid'] !== undefined) currentRow[colIndices['salesid']] = activeSaleId;
   if (colIndices['purchaseid'] !== undefined) currentRow[colIndices['purchaseid']] = updatedSale.PurchaseId;
   if (colIndices['stockid'] !== undefined) currentRow[colIndices['stockid']] = updatedSale.StockId;
-  if (colIndices['saledate'] !== undefined) currentRow[colIndices['saledate']] = updatedSale.SaleDate;
+  if (colIndices['saledate'] !== undefined) currentRow[colIndices['saledate']] = formatDateOnly(updatedSale.SaleDate);
   if (colIndices['quantity'] !== undefined) currentRow[colIndices['quantity']] = updatedSale.Quantity;
   if (colIndices['rate'] !== undefined) currentRow[colIndices['rate']] = rateValue;
   if (colIndices['saleprice'] !== undefined) currentRow[colIndices['saleprice']] = rateValue;
@@ -994,10 +996,11 @@ export async function updatePurchaseTransaction(
     currentRow.push('');
   }
 
+  const purePurchaseDate = formatDateOnly(updatedPurchase.PurchaseDate);
   if (colIndices['purchaseid'] !== undefined) currentRow[colIndices['purchaseid']] = updatedPurchase.PurchaseId;
   if (colIndices['stockid'] !== undefined) currentRow[colIndices['stockid']] = updatedPurchase.StockId;
-  if (colIndices['purchasedate'] !== undefined) currentRow[colIndices['purchasedate']] = updatedPurchase.PurchaseDate;
-  if (colIndices['date'] !== undefined && colIndices['purchasedate'] === undefined) currentRow[colIndices['date']] = updatedPurchase.PurchaseDate;
+  if (colIndices['purchasedate'] !== undefined) currentRow[colIndices['purchasedate']] = purePurchaseDate;
+  if (colIndices['date'] !== undefined && colIndices['purchasedate'] === undefined) currentRow[colIndices['date']] = purePurchaseDate;
   if (colIndices['quantity'] !== undefined) currentRow[colIndices['quantity']] = updatedPurchase.Quantity;
   if (colIndices['shares'] !== undefined && colIndices['quantity'] === undefined) currentRow[colIndices['shares']] = updatedPurchase.Quantity;
   if (colIndices['purchaseprice'] !== undefined) currentRow[colIndices['purchaseprice']] = updatedPurchase.PurchasePrice;
@@ -1041,13 +1044,13 @@ export async function analyzeSheetStockFormulas(
   headers: string[];
   colIndices: Record<string, number>;
   formulaTemplates: Record<string, { formula: string; sourceRow: number }>;
-  totalRows: number;
+  lastFilledRow: number;
 }> {
   const targetHeaders = INVESTMENT_SHEET_SCHEMAS.find(s => s.title === 'Stocks')!.headers;
 
   try {
     const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A1:Z100?valueRenderOption=FORMULA`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A:Z?valueRenderOption=FORMULA`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
 
@@ -1056,7 +1059,7 @@ export async function analyzeSheetStockFormulas(
         headers: targetHeaders,
         colIndices: Object.fromEntries(targetHeaders.map((h, i) => [h.toLowerCase().replace(/[^a-z0-9]/g, ''), i])),
         formulaTemplates: {},
-        totalRows: 1,
+        lastFilledRow: 1,
       };
     }
 
@@ -1096,24 +1099,61 @@ export async function analyzeSheetStockFormulas(
       ).catch(console.error);
     }
 
-    // Inspect existing data rows for formula patterns
-    const formulaTemplates: Record<string, { formula: string; sourceRow: number }> = {};
-    for (let r = 1; r < rows.length; r++) {
-      const row = rows[r];
-      const sourceRow = r + 1; // 1-based sheet row
+    const mktColLetter = colIndexToLetter(colIndices['mktsymbol'] ?? 2);
+    const stockIdColLetter = colIndexToLetter(colIndices['stockid'] ?? 0);
 
-      for (const colKey of requiredCols) {
-        if (!formulaTemplates[colKey]) {
+    // Find the last row index that contains actual non-empty content
+    let lastFilledRow = 1; // Row 1 is header
+    const formulaTemplates: Record<string, { formula: string; sourceRow: number }> = {};
+
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      if (row && row.some(cell => cell !== undefined && String(cell).trim() !== '')) {
+        lastFilledRow = r + 1; // 1-based sheet row
+      }
+
+      if (r > 0 && row) {
+        const sheetRow = r + 1;
+        let rowNeedsRepair = false;
+        const repairedRow = [...row];
+
+        for (const colKey of requiredCols) {
           const colIdx = colIndices[colKey];
           if (colIdx !== undefined && row[colIdx] !== undefined) {
             const cellVal = String(row[colIdx]).trim();
             if (cellVal.startsWith('=')) {
-              formulaTemplates[colKey] = {
-                formula: cellVal,
-                sourceRow,
-              };
+              if (!formulaTemplates[colKey]) {
+                formulaTemplates[colKey] = {
+                  formula: cellVal,
+                  sourceRow: sheetRow,
+                };
+              }
+              // Automatically repair any formulas with C101 or mismatched row numbers
+              const mktRegex = new RegExp(`\\b(${mktColLetter})\\d+\\b`, 'gi');
+              const idRegex = new RegExp(`\\b(${stockIdColLetter})\\d+\\b`, 'gi');
+              const fixed = cellVal.replace(mktRegex, `$1${sheetRow}`).replace(idRegex, `$1${sheetRow}`);
+              if (fixed !== cellVal) {
+                repairedRow[colIdx] = fixed;
+                rowNeedsRepair = true;
+              }
             }
           }
+        }
+
+        // Auto-heal existing rows with broken C101 formulas in the background
+        if (rowNeedsRepair) {
+          const endColLetter = colIndexToLetter(headers.length - 1);
+          fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A${sheetRow}:${endColLetter}${sheetRow}?valueInputOption=USER_ENTERED`,
+            {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ values: [repairedRow] }),
+            }
+          ).catch(console.error);
         }
       }
     }
@@ -1122,7 +1162,7 @@ export async function analyzeSheetStockFormulas(
       headers,
       colIndices,
       formulaTemplates,
-      totalRows: rows.length,
+      lastFilledRow,
     };
   } catch (err) {
     console.error('Error analyzing stock formulas:', err);
@@ -1130,7 +1170,7 @@ export async function analyzeSheetStockFormulas(
       headers: targetHeaders,
       colIndices: Object.fromEntries(targetHeaders.map((h, i) => [h.toLowerCase().replace(/[^a-z0-9]/g, ''), i])),
       formulaTemplates: {},
-      totalRows: 1,
+      lastFilledRow: 1,
     };
   }
 }
@@ -1138,7 +1178,7 @@ export async function analyzeSheetStockFormulas(
 /**
  * Adds a new stock to the Stocks main table.
  * Analyzes the sheet for formulas in Liverate, closeyest, volume, 52WkHigh, 52WkLow,
- * shares, changepct, eps, pe, and populates the same adapted formulas in the new row.
+ * shares, changepct, eps, pe, and ensures all formulas strictly point to the new added row number (e.g. C{newRow}, A{newRow}).
  */
 export async function addNewStockWithFormulas(
   accessToken: string,
@@ -1147,115 +1187,123 @@ export async function addNewStockWithFormulas(
   defaultPrice?: number
 ): Promise<{ success: boolean; rowNumber: number; stock: Stock }> {
   const analysis = await analyzeSheetStockFormulas(accessToken, spreadsheetId);
-  const targetRow = Math.max(2, analysis.totalRows + 1);
+  // Calculate the target row immediately following the last non-empty row
+  const targetRow = analysis.lastFilledRow + 1;
 
   const mktColLetter = colIndexToLetter(analysis.colIndices['mktsymbol'] ?? 2); // Col C
   const stockIdColLetter = colIndexToLetter(analysis.colIndices['stockid'] ?? 0); // Col A
   const initialPrice = defaultPrice || newStock.Liverate || newStock.CurrentPrice || 1000;
 
-  // Adapt an existing formula from the sheet or construct standard robust formula
-  const adaptOrGenerateFormula = (colKey: string, fallbackFormula: string): string => {
+  // Build standard canonical formula strictly pointing to rowNum
+  const buildFormula = (colKey: string, rowNum: number, price: number): string => {
+    switch (colKey) {
+      case 'liverate':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"price"),${price.toFixed(2)})`;
+      case 'closeyest':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"closeyest"),0)`;
+      case 'volume':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"volume"),0)`;
+      case '52wkhigh':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"high52"),0)`;
+      case '52wklow':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"low52"),0)`;
+      case 'shares':
+        return `=IFERROR(SUMIFS(Purchases!D:D,Purchases!B:B,${stockIdColLetter}${rowNum}),0)`;
+      case 'changepct':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"changepct"),0)`;
+      case 'eps':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"eps"),0)`;
+      case 'pe':
+        return `=IFERROR(GOOGLEFINANCE(${mktColLetter}${rowNum},"pe"),0)`;
+      default:
+        return '';
+    }
+  };
+
+  // Adapt an existing formula from the sheet or construct standard formula, ensuring row numbers point to rowNum
+  const adaptOrGenerateFormula = (colKey: string, rowNum: number): string => {
     const existing = analysis.formulaTemplates[colKey];
-    if (existing && existing.formula) {
-      // Replace references to sourceRow with targetRow e.g. C2 -> C10, A2 -> A10
-      const rowRefRegex = new RegExp(`([A-Z]+)${existing.sourceRow}\\b`, 'g');
-      let adapted = existing.formula.replace(rowRefRegex, `$1${targetRow}`);
-      // Replace fallback price in IFERROR if applicable
+    if (existing && existing.formula && existing.formula.startsWith('=')) {
+      let adapted = existing.formula;
+      // Replace any reference to mktColLetter (e.g. C101, C2) with the exact rowNum
+      const mktRegex = new RegExp(`\\b(${mktColLetter})\\d+\\b`, 'gi');
+      adapted = adapted.replace(mktRegex, `$1${rowNum}`);
+      // Replace any reference to stockIdColLetter (e.g. A101, A2) with the exact rowNum
+      const idRegex = new RegExp(`\\b(${stockIdColLetter})\\d+\\b`, 'gi');
+      adapted = adapted.replace(idRegex, `$1${rowNum}`);
       if (colKey === 'liverate' && initialPrice > 0) {
         adapted = adapted.replace(/,\s*[0-9]+(?:\.[0-9]+)?\s*\)/, `,${initialPrice.toFixed(2)})`);
       }
       return adapted;
     }
-    return fallbackFormula;
+    return buildFormula(colKey, rowNum, initialPrice);
   };
 
-  const formulas: Record<string, string> = {
-    liverate: adaptOrGenerateFormula(
-      'liverate',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"price"),${initialPrice.toFixed(2)})`
-    ),
-    closeyest: adaptOrGenerateFormula(
-      'closeyest',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"closeyest"),0)`
-    ),
-    volume: adaptOrGenerateFormula(
-      'volume',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"volume"),0)`
-    ),
-    '52wkhigh': adaptOrGenerateFormula(
-      '52wkhigh',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"high52"),0)`
-    ),
-    '52wklow': adaptOrGenerateFormula(
-      '52wklow',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"low52"),0)`
-    ),
-    shares: adaptOrGenerateFormula(
-      'shares',
-      `=IFERROR(SUMIFS(Purchases!D:D,Purchases!B:B,${stockIdColLetter}${targetRow}),0)`
-    ),
-    changepct: adaptOrGenerateFormula(
-      'changepct',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"changepct"),0)`
-    ),
-    eps: adaptOrGenerateFormula(
-      'eps',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"eps"),0)`
-    ),
-    pe: adaptOrGenerateFormula(
-      'pe',
-      `=IFERROR(GOOGLEFINANCE(${mktColLetter}${targetRow},"pe"),0)`
-    ),
-  };
-
-  // Build row strictly matching header column order
-  const newRow: any[] = analysis.headers.map(header => {
-    const norm = header.toLowerCase().replace(/[^a-z0-9]/g, '');
-    switch (norm) {
-      case 'stockid':
-        return newStock.StockId;
-      case 'symbol':
-        return newStock.Symbol;
-      case 'mktsymbol':
-        return newStock.MktSymbol;
-      case 'companyname':
-        return newStock.CompanyName;
-      case 'industryid':
-      case 'induistryid':
-        return newStock.IndustryId;
-      case 'exchange':
-        return newStock.Exchange;
-      case 'liverate':
-        return formulas.liverate;
-      case 'closeyest':
-        return formulas.closeyest;
-      case 'volume':
-        return formulas.volume;
-      case '52wkhigh':
-        return formulas['52wkhigh'];
-      case '52wklow':
-        return formulas['52wklow'];
-      case 'shares':
-        return formulas.shares;
-      case 'changepct':
-        return formulas.changepct;
-      case 'eps':
-        return formulas.eps;
-      case 'pe':
-        return formulas.pe;
-      case 'currency':
-        return newStock.Currency || 'INR';
-      case 'dividendyield':
-        return newStock.DividendYield ?? 0;
-      case 'lastupdated':
-        return newStock.LastUpdated || new Date().toISOString();
-      default:
-        return '';
-    }
+  const getFormulasForRow = (rowNum: number): Record<string, string> => ({
+    liverate: adaptOrGenerateFormula('liverate', rowNum),
+    closeyest: adaptOrGenerateFormula('closeyest', rowNum),
+    volume: adaptOrGenerateFormula('volume', rowNum),
+    '52wkhigh': adaptOrGenerateFormula('52wkhigh', rowNum),
+    '52wklow': adaptOrGenerateFormula('52wklow', rowNum),
+    shares: adaptOrGenerateFormula('shares', rowNum),
+    changepct: adaptOrGenerateFormula('changepct', rowNum),
+    eps: adaptOrGenerateFormula('eps', rowNum),
+    pe: adaptOrGenerateFormula('pe', rowNum),
   });
 
+  const buildRowData = (rowNum: number): any[] => {
+    const formulas = getFormulasForRow(rowNum);
+    return analysis.headers.map(header => {
+      const norm = header.toLowerCase().replace(/[^a-z0-9]/g, '');
+      switch (norm) {
+        case 'stockid':
+          return newStock.StockId;
+        case 'symbol':
+          return newStock.Symbol;
+        case 'mktsymbol':
+          return newStock.MktSymbol;
+        case 'companyname':
+          return newStock.CompanyName;
+        case 'industryid':
+        case 'induistryid':
+          return newStock.IndustryId;
+        case 'exchange':
+          return newStock.Exchange;
+        case 'liverate':
+          return formulas.liverate;
+        case 'closeyest':
+          return formulas.closeyest;
+        case 'volume':
+          return formulas.volume;
+        case '52wkhigh':
+          return formulas['52wkhigh'];
+        case '52wklow':
+          return formulas['52wklow'];
+        case 'shares':
+          return formulas.shares;
+        case 'changepct':
+          return formulas.changepct;
+        case 'eps':
+          return formulas.eps;
+        case 'pe':
+          return formulas.pe;
+        case 'currency':
+          return newStock.Currency || 'INR';
+        case 'dividendyield':
+          return newStock.DividendYield ?? 0;
+        case 'lastupdated':
+          return formatDateOnly(newStock.LastUpdated);
+        default:
+          return '';
+      }
+    });
+  };
+
+  const newRow = buildRowData(targetRow);
+  const endColLetter = colIndexToLetter(analysis.headers.length - 1);
+
   const appendRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A:R:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A:${endColLetter}:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
       headers: {
@@ -1271,7 +1319,28 @@ export async function addNewStockWithFormulas(
     throw new Error(`Failed to append new stock with formulas: ${err?.error?.message || appendRes.statusText}`);
   }
 
-  return { success: true, rowNumber: targetRow, stock: newStock };
+  const appendData = await appendRes.json();
+  const updatedRange: string = appendData.updates?.updatedRange || '';
+  const rangeMatch = updatedRange.match(/!?[A-Z]+(\d+):/i) || updatedRange.match(/!?[A-Z]+(\d+)$/i);
+  const actualRowNumber = rangeMatch ? parseInt(rangeMatch[1], 10) : targetRow;
+
+  // If Google Sheets appended to a different row than targetRow, re-point formulas strictly to actualRowNumber
+  if (actualRowNumber && actualRowNumber !== targetRow) {
+    const correctedRow = buildRowData(actualRowNumber);
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A${actualRowNumber}:${endColLetter}${actualRowNumber}?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values: [correctedRow] }),
+      }
+    ).catch(console.error);
+  }
+
+  return { success: true, rowNumber: actualRowNumber || targetRow, stock: newStock };
 }
 
 /**
@@ -1285,7 +1354,7 @@ export async function updateExistingStock(
   updatedStock: Stock
 ): Promise<void> {
   const fetchRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A1:Z100?valueRenderOption=FORMULA`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A:Z?valueRenderOption=FORMULA`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
@@ -1317,7 +1386,7 @@ export async function updateExistingStock(
   const sheetRowNum = rowIndex + 1; // 1-based sheet row
   const currentRow = [...rows[rowIndex]];
 
-  // Update only editable metadata columns, preserving any formulas in Liverate, closeyest, etc.
+  // Update only editable metadata columns
   if (colIndices['symbol'] !== undefined) currentRow[colIndices['symbol']] = updatedStock.Symbol;
   if (colIndices['mktsymbol'] !== undefined) currentRow[colIndices['mktsymbol']] = updatedStock.MktSymbol;
   if (colIndices['companyname'] !== undefined) currentRow[colIndices['companyname']] = updatedStock.CompanyName;
@@ -1325,9 +1394,25 @@ export async function updateExistingStock(
   if (colIndices['induistryid'] !== undefined) currentRow[colIndices['induistryid']] = updatedStock.IndustryId;
   if (colIndices['exchange'] !== undefined) currentRow[colIndices['exchange']] = updatedStock.Exchange;
   if (colIndices['dividendyield'] !== undefined) currentRow[colIndices['dividendyield']] = updatedStock.DividendYield;
-  if (colIndices['lastupdated'] !== undefined) currentRow[colIndices['lastupdated']] = new Date().toISOString();
+  if (colIndices['lastupdated'] !== undefined) currentRow[colIndices['lastupdated']] = getTodayDateOnly();
 
-  // If MktSymbol was modified, update row references in formulas if needed
+  // Ensure formulas in this row point to sheetRowNum (fixing any C101 or mismatched row numbers)
+  const mktColLetter = colIndexToLetter(colIndices['mktsymbol'] ?? 2);
+  const stockIdColLetter = colIndexToLetter(colIndices['stockid'] ?? 0);
+  const formulaCols = ['liverate', 'closeyest', 'volume', '52wkhigh', '52wklow', 'shares', 'changepct', 'eps', 'pe'];
+
+  for (const colKey of formulaCols) {
+    const idx = colIndices[colKey];
+    if (idx !== undefined && currentRow[idx] !== undefined) {
+      const cellVal = String(currentRow[idx]).trim();
+      if (cellVal.startsWith('=')) {
+        const mktRegex = new RegExp(`\\b(${mktColLetter})\\d+\\b`, 'gi');
+        const idRegex = new RegExp(`\\b(${stockIdColLetter})\\d+\\b`, 'gi');
+        currentRow[idx] = cellVal.replace(mktRegex, `$1${sheetRowNum}`).replace(idRegex, `$1${sheetRowNum}`);
+      }
+    }
+  }
+
   const endColLetter = colIndexToLetter(headers.length - 1);
   const updateRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Stocks!A${sheetRowNum}:${endColLetter}${sheetRowNum}?valueInputOption=USER_ENTERED`,
@@ -1349,8 +1434,10 @@ export async function updateExistingStock(
 
 /**
  * Saves or updates a single Stock in the main Stocks table.
- * If new stock, populates formulas for Liverate, closeyest, volume, 52WkHigh, 52WkLow, shares, changepct, eps, pe.
- * If existing, updates metadata and preserves all formulas.
+ * Enforces that both StockId and MktSymbol are required and unique individually and in combination.
+ * If new stock, populates formulas for Liverate, closeyest, volume, 52WkHigh, 52WkLow, shares, changepct, eps, pe
+ * pointing to the new row number.
+ * If existing, updates metadata and repairs formulas to point to its own row number.
  */
 export async function saveStock(
   accessToken: string,
@@ -1358,10 +1445,37 @@ export async function saveStock(
   stock: Stock,
   existingStocks: Stock[]
 ): Promise<void> {
-  const existing = existingStocks.find(s => s.StockId.trim().toUpperCase() === stock.StockId.trim().toUpperCase());
+  const stockId = (stock.StockId || '').trim().toUpperCase();
+  const mktSymbol = (stock.MktSymbol || '').trim().toUpperCase();
+
+  if (!stockId) {
+    throw new Error('StockId is required and must be unique.');
+  }
+  if (!mktSymbol) {
+    throw new Error('MktSymbol is required and must be unique.');
+  }
+
+  const existing = existingStocks.find(s => s.StockId.trim().toUpperCase() === stockId);
   if (existing) {
+    // Check MktSymbol uniqueness among all other stocks
+    const duplicateMkt = existingStocks.find(s => 
+      s.StockId.trim().toUpperCase() !== stockId && 
+      (s.MktSymbol || '').trim().toUpperCase() === mktSymbol
+    );
+    if (duplicateMkt) {
+      throw new Error(`Market Ticker '${mktSymbol}' is already used by stock ${duplicateMkt.Symbol} (${duplicateMkt.StockId}). MktSymbol must be unique.`);
+    }
     await updateExistingStock(accessToken, spreadsheetId, stock);
   } else {
+    // Adding new stock: check both StockId and MktSymbol uniqueness
+    const duplicateId = existingStocks.find(s => s.StockId.trim().toUpperCase() === stockId);
+    if (duplicateId) {
+      throw new Error(`StockId '${stockId}' already exists in the Stocks table. StockId must be unique.`);
+    }
+    const duplicateMkt = existingStocks.find(s => (s.MktSymbol || '').trim().toUpperCase() === mktSymbol);
+    if (duplicateMkt) {
+      throw new Error(`Market Ticker '${mktSymbol}' is already used by stock ${duplicateMkt.Symbol} (${duplicateMkt.StockId}). MktSymbol must be unique.`);
+    }
     await addNewStockWithFormulas(accessToken, spreadsheetId, stock, stock.Liverate || stock.CurrentPrice);
   }
 }

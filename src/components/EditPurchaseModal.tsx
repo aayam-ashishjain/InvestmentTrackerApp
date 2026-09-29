@@ -9,7 +9,7 @@ import {
   Layers,
   FileText
 } from 'lucide-react';
-import { Purchase, EnrichedPurchase, Stock, Sale, formatINR } from '../types/database';
+import { Purchase, EnrichedPurchase, Stock, Sale, formatINR, formatDateOnly } from '../types/database';
 
 interface EditPurchaseModalProps {
   isOpen: boolean;
@@ -53,18 +53,7 @@ export const EditPurchaseModal: React.FC<EditPurchaseModalProps> = ({
     setQuantity(purchase.Quantity !== undefined ? purchase.Quantity.toString() : '1');
     setPurchasePrice(purchase.PurchasePrice !== undefined ? purchase.PurchasePrice.toString() : '0');
     setFees(purchase.Fees !== undefined ? Number(purchase.Fees).toFixed(2) : '0.00');
-
-    if (purchase.PurchaseDate) {
-      try {
-        const d = new Date(purchase.PurchaseDate);
-        setPurchaseDate(d.toISOString().slice(0, 16));
-      } catch {
-        setPurchaseDate(new Date().toISOString().slice(0, 16));
-      }
-    } else {
-      setPurchaseDate(new Date().toISOString().slice(0, 16));
-    }
-
+    setPurchaseDate(formatDateOnly(purchase.PurchaseDate));
     setNotes(purchase.Notes || '');
     setError(null);
   }, [isOpen, purchase]);
@@ -104,7 +93,7 @@ export const EditPurchaseModal: React.FC<EditPurchaseModalProps> = ({
       const updated: Purchase = {
         PurchaseId: purchase.PurchaseId,
         StockId: purchase.StockId,
-        PurchaseDate: new Date(purchaseDate).toISOString(),
+        PurchaseDate: formatDateOnly(purchaseDate),
         Quantity: parsedQty,
         PurchasePrice: parsedPrice,
         TotalAmount: calculatedTotal,
@@ -136,14 +125,9 @@ export const EditPurchaseModal: React.FC<EditPurchaseModalProps> = ({
               <ShoppingCart className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                  Edit Purchase Lot
-                </h3>
-                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700">
-                  {purchase.PurchaseId}
-                </span>
-              </div>
+              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                Edit Purchase Lot
+              </h3>
               <p className="text-xs text-slate-400">
                 Update purchase date, price, or lot quantity
               </p>
@@ -161,20 +145,14 @@ export const EditPurchaseModal: React.FC<EditPurchaseModalProps> = ({
         </div>
 
         {/* Stock Badge Info */}
-        <div className="px-4 sm:px-6 pt-4 pb-2 bg-slate-950/40 border-b border-slate-800/60 flex items-center justify-between">
+        <div className="px-4 sm:px-6 py-3 bg-slate-950/40 border-b border-slate-800/60 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="font-mono font-bold text-base text-white tracking-wide">
-              {linkedStock?.Symbol || purchase.StockId}
+              {linkedStock?.Symbol || 'Stock'}
             </div>
-            <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-mono font-semibold">
-              {linkedStock?.Exchange || 'NSE'}
-            </span>
-            <span className="text-xs text-slate-400 hidden sm:inline truncate max-w-[200px]">
+            <span className="text-xs text-slate-400 hidden sm:inline truncate max-w-[250px]">
               {linkedStock?.CompanyName}
             </span>
-          </div>
-          <div className="text-xs font-mono text-slate-400">
-            Stock ID: <span className="text-cyan-400 font-bold">{purchase.StockId}</span>
           </div>
         </div>
 
@@ -205,10 +183,10 @@ export const EditPurchaseModal: React.FC<EditPurchaseModalProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Purchase Date & Time</span>
+              <span>Purchase Date</span>
             </label>
             <input
-              type="datetime-local"
+              type="date"
               required
               value={purchaseDate}
               onChange={e => setPurchaseDate(e.target.value)}

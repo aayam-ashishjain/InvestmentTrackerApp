@@ -213,6 +213,35 @@ export function generateSaleId(existingSales: Sale[]): string {
 export const generateSalesId = generateSaleId;
 
 /**
+ * Ensures a date string or Date object is returned in pure Date format: "YYYY-MM-DD"
+ */
+export function formatDateOnly(dateInput?: string | Date | null): string {
+  if (!dateInput) return new Date().toISOString().split('T')[0];
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const firstPart = trimmed.split(/[T\s]/)[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(firstPart)) {
+      return firstPart;
+    }
+  }
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) {
+    return new Date().toISOString().split('T')[0];
+  }
+  return d.toISOString().split('T')[0];
+}
+
+/**
+ * Returns today's date formatted as "YYYY-MM-DD"
+ */
+export function getTodayDateOnly(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+/**
  * Autogenerates the next StockId using template "STK0001"
  */
 export function generateStockId(existingStocks: Stock[]): string {
@@ -303,7 +332,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C2,"changepct"),0.52)',
         '=IFERROR(GOOGLEFINANCE(C2,"eps"),102.50)',
         '=IFERROR(GOOGLEFINANCE(C2,"pe"),29.07)',
-        'INR', 0.35, new Date().toISOString()
+        'INR', 0.35, getTodayDateOnly()
       ],
       [
         'STK0002', 'TCS', 'TCS.NSE', 'Tata Consultancy Services Ltd.', 'IND0002', 'NSE',
@@ -316,7 +345,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C3,"changepct"),0.83)',
         '=IFERROR(GOOGLEFINANCE(C3,"eps"),128.40)',
         '=IFERROR(GOOGLEFINANCE(C3,"pe"),33.10)',
-        'INR', 1.15, new Date().toISOString()
+        'INR', 1.15, getTodayDateOnly()
       ],
       [
         'STK0003', 'HDFCBANK', 'HDFCBANK.NSE', 'HDFC Bank Ltd.', 'IND0003', 'NSE',
@@ -329,7 +358,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C4,"changepct"),-0.47)',
         '=IFERROR(GOOGLEFINANCE(C4,"eps"),85.20)',
         '=IFERROR(GOOGLEFINANCE(C4,"pe"),19.25)',
-        'INR', 1.20, new Date().toISOString()
+        'INR', 1.20, getTodayDateOnly()
       ],
       [
         'STK0004', 'INFY', 'INFY.NSE', 'Infosys Ltd.', 'IND0002', 'NSE',
@@ -342,7 +371,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C5,"changepct"),0.84)',
         '=IFERROR(GOOGLEFINANCE(C5,"eps"),63.15)',
         '=IFERROR(GOOGLEFINANCE(C5,"pe"),29.94)',
-        'INR', 2.10, new Date().toISOString()
+        'INR', 2.10, getTodayDateOnly()
       ],
       [
         'STK0005', 'ICICIBANK', 'ICICIBANK.NSE', 'ICICI Bank Ltd.', 'IND0003', 'NSE',
@@ -355,7 +384,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C6,"changepct"),0.69)',
         '=IFERROR(GOOGLEFINANCE(C6,"eps"),59.80)',
         '=IFERROR(GOOGLEFINANCE(C6,"pe"),20.40)',
-        'INR', 0.85, new Date().toISOString()
+        'INR', 0.85, getTodayDateOnly()
       ],
       [
         'STK0006', 'TATAMOTORS', 'TATAMOTORS.NSE', 'Tata Motors Ltd.', 'IND0004', 'NSE',
@@ -368,7 +397,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C7,"changepct"),-1.25)',
         '=IFERROR(GOOGLEFINANCE(C7,"eps"),82.40)',
         '=IFERROR(GOOGLEFINANCE(C7,"pe"),11.84)',
-        'INR', 0.60, new Date().toISOString()
+        'INR', 0.60, getTodayDateOnly()
       ],
       [
         'STK0007', 'ITC', 'ITC.BSE', 'ITC Ltd.', 'IND0005', 'BSE',
@@ -381,7 +410,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C8,"changepct"),0.85)',
         '=IFERROR(GOOGLEFINANCE(C8,"eps"),16.80)',
         '=IFERROR(GOOGLEFINANCE(C8,"pe"),30.37)',
-        'INR', 2.75, new Date().toISOString()
+        'INR', 2.75, getTodayDateOnly()
       ],
       [
         'STK0008', 'LT', 'LT.NSE', 'Larsen & Toubro Ltd.', 'IND0006', 'NSE',
@@ -394,7 +423,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C9,"changepct"),0.42)',
         '=IFERROR(GOOGLEFINANCE(C9,"eps"),94.60)',
         '=IFERROR(GOOGLEFINANCE(C9,"pe"),38.26)',
-        'INR', 0.95, new Date().toISOString()
+        'INR', 0.95, getTodayDateOnly()
       ]
     ]
   },
@@ -402,19 +431,19 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
     title: 'Purchases',
     headers: ['PurchaseId', 'StockId', 'PurchaseDate', 'Quantity', 'PurchasePrice', 'TotalAmount', 'Fees', 'Notes'],
     sampleRows: [
-      ['Pur00000001', 'STK0001', '2025-01-15T14:30:00Z', 20, 2850.00, 57000.00, 20, 'Initial accumulation in Reliance'],
-      ['Pur00000002', 'STK0002', '2025-01-20T16:00:00Z', 15, 3950.00, 59250.00, 20, 'IT sector core portfolio buy'],
-      ['Pur00000003', 'STK0003', '2025-02-01T15:20:00Z', 35, 1580.00, 55300.00, 20, 'Private bank leader allocation'],
-      ['Pur00000004', 'STK0004', '2025-02-18T11:00:00Z', 25, 1720.00, 43000.00, 20, 'Q3 results dip accumulation'],
-      ['Pur00000005', 'STK0006', '2025-02-22T13:45:00Z', 50, 910.00, 45500.00, 20, 'EV transition long term hold'],
-      ['Pur00000006', 'STK0007', '2025-03-05T14:10:00Z', 100, 480.00, 48000.00, 20, 'Defensive dividend stock allocation']
+      ['Pur00000001', 'STK0001', '2025-01-15', 20, 2850.00, 57000.00, 20, 'Initial accumulation in Reliance'],
+      ['Pur00000002', 'STK0002', '2025-01-20', 15, 3950.00, 59250.00, 20, 'IT sector core portfolio buy'],
+      ['Pur00000003', 'STK0003', '2025-02-01', 35, 1580.00, 55300.00, 20, 'Private bank leader allocation'],
+      ['Pur00000004', 'STK0004', '2025-02-18', 25, 1720.00, 43000.00, 20, 'Q3 results dip accumulation'],
+      ['Pur00000005', 'STK0006', '2025-02-22', 50, 910.00, 45500.00, 20, 'EV transition long term hold'],
+      ['Pur00000006', 'STK0007', '2025-03-05', 100, 480.00, 48000.00, 20, 'Defensive dividend stock allocation']
     ]
   },
   {
     title: 'Sales',
     headers: ['SalesId', 'PurchaseId', 'StockId', 'SaleDate', 'Quantity', 'Rate', 'TotalAmount', 'Fees', 'Notes'],
     sampleRows: [
-      ['Sal00000001', 'Pur00000001', 'STK0001', '2025-02-10T11:00:00Z', 5, 2950.00, 14750.00, 20, 'Partial profit booking on Reliance']
+      ['Sal00000001', 'Pur00000001', 'STK0001', '2025-02-10', 5, 2950.00, 14750.00, 20, 'Partial profit booking on Reliance']
     ]
   }
 ];

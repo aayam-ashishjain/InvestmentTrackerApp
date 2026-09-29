@@ -21,7 +21,9 @@ import {
   Stock, 
   EnrichedSale,
   EnrichedPurchase,
-  formatINR 
+  formatINR,
+  formatDateOnly,
+  getTodayDateOnly 
 } from '../types/database';
 
 interface EditSaleModalProps {
@@ -87,17 +89,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
     setSalePrice(sale.SalePrice ? sale.SalePrice.toString() : '');
     setFees(sale.Fees !== undefined ? Number(sale.Fees).toFixed(2) : '0.00');
     
-    if (sale.SaleDate) {
-      try {
-        const d = new Date(sale.SaleDate);
-        setSaleDate(d.toISOString().slice(0, 16));
-      } catch {
-        setSaleDate(new Date().toISOString().slice(0, 16));
-      }
-    } else {
-      setSaleDate(new Date().toISOString().slice(0, 16));
-    }
-
+    setSaleDate(formatDateOnly(sale.SaleDate));
     setNotes(sale.Notes || '');
     setError(null);
   }, [isOpen, sale]);
@@ -155,7 +147,7 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
         TotalAmount: netProceeds,
         Fees: parsedFees,
         Notes: notes.trim(),
-        SaleDate: new Date(saleDate).toISOString(),
+        SaleDate: formatDateOnly(saleDate),
       };
 
       await onUpdateSale(updated);
@@ -181,14 +173,9 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
               <Edit3 className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                  Edit Sale Record
-                </h3>
-                <span className="font-mono text-xs font-bold text-amber-400">
-                  {sale.SaleId || sale.SalesId}
-                </span>
-              </div>
+              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                Edit Sale Record
+              </h3>
               <p className="text-xs text-slate-400 mt-0.5">
                 Update shares sold, rate, fees, or date
               </p>
@@ -211,16 +198,13 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
                 <Tag className="w-4 h-4 text-cyan-400" />
                 <span className="font-bold text-white text-sm">{displaySymbol}</span>
                 <span className="text-xs text-slate-400 font-medium">({displayCompanyName})</span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 font-mono">
-                  {displayExchange}
-                </span>
               </div>
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-slate-400">Purchase lot:</span>
-                <span className="font-mono font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-                  {sale.PurchaseId}
-                </span>
-              </div>
+              {linkedPurchase?.PurchaseDate ? (
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Bought {new Date(linkedPurchase.PurchaseDate).toLocaleDateString()}</span>
+                </div>
+              ) : null}
             </div>
 
             {/* Purchase Lot Share Balance Grid */}
@@ -340,14 +324,14 @@ export const EditSaleModal: React.FC<EditSaleModalProps> = ({
               />
             </div>
 
-            {/* Sale Date & Time */}
+            {/* Sale Date */}
             <div>
               <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5 mb-1.5">
                 <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Sale Date & Time</span>
+                <span>Sale Date</span>
               </label>
               <input
-                type="datetime-local"
+                type="date"
                 value={saleDate}
                 onChange={e => setSaleDate(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-amber-500 transition"

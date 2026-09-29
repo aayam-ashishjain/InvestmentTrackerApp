@@ -28,7 +28,8 @@ import {
   EnrichedPurchase, 
   EnrichedSale,
   EnrichedStock,
-  DEFAULT_INDUSTRIES
+  DEFAULT_INDUSTRIES,
+  getTodayDateOnly
 } from './types/database';
 import { AuthScreen } from './components/AuthScreen';
 import { PortfolioDashboard } from './components/PortfolioDashboard';
@@ -289,7 +290,7 @@ export default function App() {
         return {
           ...stock,
           CurrentPrice: newPrice,
-          LastUpdated: new Date().toISOString(),
+          LastUpdated: getTodayDateOnly(),
         };
       });
 

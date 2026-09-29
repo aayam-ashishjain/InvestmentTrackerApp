@@ -35,7 +35,8 @@ import {
   EnrichedStock, 
   generateStockId, 
   deriveExchangeFromMktSymbol, 
-  formatINR 
+  formatINR,
+  getTodayDateOnly 
 } from '../types/database';
 import { PurchaseModal } from './PurchaseModal';
 import { EditStockModal } from './EditStockModal';
@@ -112,6 +113,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   // Add Stock Dialog state
   const [isAddStockOpen, setIsAddStockOpen] = useState(false);
   const [isSavingStock, setIsSavingStock] = useState(false);
+  const [addStockError, setAddStockError] = useState<string | null>(null);
   const [newStockData, setNewStockData] = useState({
     stockId: '',
     symbol: '',
@@ -124,6 +126,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
 
   const handleOpenAddStock = () => {
     const nextStockId = generateStockId(stocks);
+    setAddStockError(null);
     setNewStockData({
       stockId: nextStockId,
       symbol: '',
@@ -215,13 +218,41 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   // Fast direct save for new stock
   const handleCreateStock = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newStockData.symbol || !newStockData.name || isSavingStock) return;
+    setAddStockError(null);
+    const stockId = (newStockData.stockId || generateStockId(stocks)).trim().toUpperCase();
+    const symbol = newStockData.symbol.toUpperCase().trim();
+    const mktSymbol = (newStockData.mktSymbol || `${symbol}.NSE`).toUpperCase().trim();
+
+    if (!stockId) {
+      setAddStockError('Stock ID is required and must be unique.');
+      return;
+    }
+    if (!mktSymbol) {
+      setAddStockError('Market Ticker (MktSymbol) is required and must be unique.');
+      return;
+    }
+
+    // Check individual uniqueness and combined uniqueness
+    const existingById = stocks.find(s => s.StockId.trim().toUpperCase() === stockId);
+    const existingByMkt = stocks.find(s => (s.MktSymbol || '').trim().toUpperCase() === mktSymbol);
+
+    if (existingById && existingByMkt) {
+      setAddStockError(`Both Stock ID "${stockId}" and Market Ticker "${mktSymbol}" already exist in the Stocks table. Both must be unique.`);
+      return;
+    }
+    if (existingById) {
+      setAddStockError(`Stock ID "${stockId}" is already used by ${existingById.Symbol} (${existingById.CompanyName}). Stock ID must be unique.`);
+      return;
+    }
+    if (existingByMkt) {
+      setAddStockError(`Market Ticker "${mktSymbol}" is already used by ${existingByMkt.Symbol} (${existingByMkt.StockId}). Market Ticker must be unique.`);
+      return;
+    }
+
+    if (!symbol || !newStockData.name || isSavingStock) return;
 
     setIsSavingStock(true);
     try {
-      const stockId = (newStockData.stockId || generateStockId(stocks)).trim().toUpperCase();
-      const symbol = newStockData.symbol.toUpperCase().trim();
-      const mktSymbol = (newStockData.mktSymbol || `${symbol}.NSE`).toUpperCase().trim();
       const exchange = deriveExchangeFromMktSymbol(mktSymbol, symbol);
       const initialPrice = parseFloat(newStockData.price) || 0;
 
@@ -236,7 +267,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
         CurrentPrice: initialPrice,
         Currency: 'INR',
         DividendYield: parseFloat(newStockData.dividendYield) || 0,
-        LastUpdated: new Date().toISOString(),
+        LastUpdated: getTodayDateOnly(),
       };
 
       await onAddStock(newStock);
@@ -250,8 +281,9 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
         price: '1500.00',
         dividendYield: '1.2',
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Save stock error:', err);
+      setAddStockError(err?.message || 'Failed to save stock. Please try again.');
     } finally {
       setIsSavingStock(false);
     }
@@ -400,7 +432,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
             <option value="ALL">All Stocks</option>
             {stocks.map((s, idx) => (
               <option key={`${s.StockId}_${idx}`} value={s.StockId}>
-                {s.Symbol} — {s.CompanyName}
+                {s.StockId} • {s.Symbol} — {s.CompanyName}
               </option>
             ))}
           </select>
@@ -466,10 +498,10 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                       <div key={`m_stock_${stock.StockId}_${idx}`} className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-bold text-white text-base tracking-tight">{stock.Symbol}</span>
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 border border-slate-700 text-amber-300 font-mono">
-                                {stock.Exchange}
+                              <span className="font-mono text-xs font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-lg border border-cyan-500/30">
+                                {stock.StockId}
                               </span>
                               <button
                                 onClick={() => handleOpenEditStock(stock)}
@@ -485,11 +517,6 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                             <div className="text-base font-mono font-bold text-emerald-400">
                               {formatINR(stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice)}
                             </div>
-                            {stock.ChangePct !== undefined && (
-                              <div className={`text-xs font-mono font-semibold ${stock.ChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {stock.ChangePct >= 0 ? '+' : ''}{stock.ChangePct.toFixed(2)}%
-                              </div>
-                            )}
                           </div>
                         </div>
 
@@ -536,12 +563,9 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                     <tr>
                       <th className="py-3 px-4">Stock ID</th>
                       <th className="py-3 px-4">Symbol</th>
-                      <th className="py-3 px-4">Exchange</th>
                       <th className="py-3 px-4">Company Name</th>
                       <th className="py-3 px-4">Industry</th>
                       <th className="py-3 px-4 text-right">Price (₹)</th>
-                      <th className="py-3 px-4 text-right">52W Range (₹)</th>
-                      <th className="py-3 px-4 text-right">Shares Owned</th>
                       <th className="py-3 px-4 text-right">Avg Cost (₹)</th>
                       <th className="py-3 px-4 text-right">Invested (₹)</th>
                       <th className="py-3 px-4 text-right">Market Value (₹)</th>
@@ -580,16 +604,6 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                             </button>
                           </td>
 
-                          <td className="py-3 px-4 font-mono text-slate-300">
-                            {stock.MktSymbol || `${stock.Symbol}.${stock.Exchange}`}
-                          </td>
-
-                          <td className="py-3 px-4">
-                            <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-slate-800 border border-slate-700 text-amber-300 font-mono">
-                              {stock.Exchange}
-                            </span>
-                          </td>
-
                           <td className="py-3 px-4 font-semibold text-slate-200">
                             {stock.CompanyName}
                           </td>
@@ -609,18 +623,6 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                               <span>{formatINR(stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice)}</span>
                             </div>
-                            {stock.ChangePct !== undefined && (
-                              <div className={`text-[10px] font-mono ${stock.ChangePct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {stock.ChangePct >= 0 ? '+' : ''}{stock.ChangePct.toFixed(2)}%
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono text-xs">
-                            <div className="text-slate-200">H: {stock.High52 ? formatINR(stock.High52) : '—'}</div>
-                            <div className="text-slate-400 text-[10px]">L: {stock.Low52 ? formatINR(stock.Low52) : '—'}</div>
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono text-slate-200 font-semibold">
-                            {hasPurchases ? stock.totalQuantity.toLocaleString() : '—'}
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-slate-300">
                             {hasPurchases ? formatINR(stock.averagePurchasePrice) : '—'}
@@ -696,7 +698,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                       <div key={`m_purchase_${p.PurchaseId}_${idx}`} className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -708,6 +710,9 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                               >
                                 {p.PurchaseId}
                               </button>
+                              <span className="font-mono text-[11px] font-bold text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                                {p.StockId}
+                              </span>
                               <span className="font-bold text-white text-sm">{p.symbol}</span>
                             </div>
                             <div className="text-xs text-slate-400 truncate max-w-[200px]">{p.companyName}</div>
@@ -778,7 +783,6 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                         <th className="py-3 px-4">Purchase ID</th>
                         <th className="py-3 px-4">Stock ID</th>
                         <th className="py-3 px-4">Symbol</th>
-                        <th className="py-3 px-4">Exchange</th>
                         <th className="py-3 px-4">Date</th>
                         <th className="py-3 px-4 text-right">Bought</th>
                         <th className="py-3 px-4 text-right">Sold</th>
@@ -819,11 +823,6 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                               </div>
                               <div className="text-[11px] text-slate-400">{p.companyName}</div>
                             </td>
-                            <td className="py-3 px-4">
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 font-mono">
-                                {p.exchange}
-                              </span>
-                            </td>
                             <td className="py-3 px-4 text-slate-400 whitespace-nowrap">
                               <button
                                 type="button"
@@ -835,7 +834,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                                 title={`Edit purchase lot ${p.PurchaseId}`}
                               >
                                 <Calendar className="w-3.5 h-3.5 text-cyan-400" />
-                                <span>{new Date(p.PurchaseDate).toLocaleString()}</span>
+                                <span>{new Date(p.PurchaseDate).toLocaleDateString()}</span>
                               </button>
                             </td>
                             <td className="py-3 px-4 text-right font-mono text-slate-300">
@@ -933,8 +932,11 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                       <div key={`m_sale_${activeId}_${idx}`} className="p-4 space-y-3">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono font-bold text-amber-400 text-xs">{activeId}</span>
+                              <span className="font-mono text-[11px] font-bold text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                                {s.StockId}
+                              </span>
                               <span className="font-bold text-white text-sm">{s.symbol}</span>
                             </div>
                             <div className="text-xs text-slate-400">
@@ -989,8 +991,8 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                       <tr>
                         <th className="py-3 px-4">Sales ID</th>
                         <th className="py-3 px-4">Purchase ID</th>
+                        <th className="py-3 px-4">Stock ID</th>
                         <th className="py-3 px-4">Symbol</th>
-                        <th className="py-3 px-4">Exchange</th>
                         <th className="py-3 px-4">Date</th>
                         <th className="py-3 px-4 text-right">Shares Sold</th>
                         <th className="py-3 px-4 text-right">Rate (₹)</th>
@@ -1033,6 +1035,9 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                                 )}
                               </div>
                             </td>
+                            <td className="py-3 px-4 font-mono text-cyan-400 font-semibold">
+                              {s.StockId}
+                            </td>
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-1.5 font-bold text-white text-sm">
                                 <Tag className="w-3.5 h-3.5 text-cyan-400" />
@@ -1040,13 +1045,8 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                               </div>
                               <div className="text-[11px] text-slate-400">{s.companyName}</div>
                             </td>
-                            <td className="py-3 px-4">
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-amber-300 font-mono">
-                                {s.exchange}
-                              </span>
-                            </td>
                             <td className="py-3 px-4 text-slate-400 whitespace-nowrap">
-                              {new Date(s.SaleDate).toLocaleString()}
+                              {new Date(s.SaleDate).toLocaleDateString()}
                             </td>
                             <td className="py-3 px-4 text-right font-mono text-white font-bold">
                               {s.Quantity.toLocaleString()}
@@ -1261,25 +1261,33 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
             </div>
 
             <form onSubmit={handleCreateStock} className="space-y-4 mt-4 overflow-y-auto flex-1">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
-                  <span>Stock ID</span>
-                  <span className="text-[11px] text-cyan-400 font-mono">Custom ID</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. STK0009"
-                  value={newStockData.stockId}
-                  onChange={e => setNewStockData({ ...newStockData, stockId: e.target.value.toUpperCase() })}
-                  className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-xs text-cyan-300 uppercase focus:outline-none focus:border-cyan-500 font-mono font-bold"
-                />
-              </div>
+              {addStockError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300 font-medium">
+                  {addStockError}
+                </div>
+              )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                    <span>Stock ID <span className="text-cyan-400">*</span></span>
+                    <span className="text-[10px] text-cyan-400 font-mono">Unique</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. STK0001"
+                    value={newStockData.stockId}
+                    onChange={e => {
+                      setAddStockError(null);
+                      setNewStockData({ ...newStockData, stockId: e.target.value.toUpperCase().trim() });
+                    }}
+                    className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-cyan-400 font-bold uppercase focus:outline-none focus:border-cyan-500 font-mono"
+                  />
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Symbol (Ticker)
+                    Symbol (Ticker) <span className="text-cyan-400">*</span>
                   </label>
                   <input
                     type="text"
@@ -1291,26 +1299,25 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Market Ticker
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                    <span>Market Ticker <span className="text-cyan-400">*</span></span>
+                    <span className="text-[10px] text-cyan-400 font-mono">Unique</span>
                   </label>
                   <input
                     type="text"
                     required
                     placeholder="e.g. INFY.NSE"
                     value={newStockData.mktSymbol}
-                    onChange={e => setNewStockData({ ...newStockData, mktSymbol: e.target.value.toUpperCase() })}
+                    onChange={e => {
+                      setAddStockError(null);
+                      setNewStockData({ ...newStockData, mktSymbol: e.target.value.toUpperCase().trim() });
+                    }}
                     className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white uppercase focus:outline-none focus:border-cyan-500 font-mono"
                   />
                 </div>
               </div>
 
-              <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
-                <span className="text-slate-400">Exchange:</span>
-                <span className="font-mono font-bold text-amber-300 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-                  {derivedExchange}
-                </span>
-              </div>
+
 
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">

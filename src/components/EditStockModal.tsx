@@ -11,7 +11,11 @@ import {
   Layers, 
   ArrowUpRight,
   Clock,
-  Inbox
+  Inbox,
+  BarChart3,
+  Lock,
+  TrendingUp,
+  Percent
 } from 'lucide-react';
 import { 
   Stock, 
@@ -21,7 +25,9 @@ import {
   EnrichedPurchase, 
   EnrichedSale, 
   deriveExchangeFromMktSymbol, 
-  formatINR 
+  formatINR,
+  formatDateOnly,
+  getTodayDateOnly 
 } from '../types/database';
 import { EditPurchaseModal } from './EditPurchaseModal';
 import { EditSaleModal } from './EditSaleModal';
@@ -51,7 +57,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   onUpdatePurchase,
   onUpdateSale,
 }) => {
-  const [activeTab, setActiveTab] = useState<'details' | 'purchases' | 'sales'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'analytics' | 'purchases' | 'sales'>('details');
 
   // Stock edit fields
   const [symbol, setSymbol] = useState('');
@@ -60,6 +66,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   const [industryId, setIndustryId] = useState('');
   const [dividendYield, setDividendYield] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Sub-modal states for editing purchase and sale
   const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
@@ -75,6 +82,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
       setCompanyName(stock.CompanyName);
       setIndustryId(stock.IndustryId || industries[0]?.IndustryId || 'IND0002');
       setDividendYield((stock.DividendYield || 0).toString());
+      setEditError(null);
     }
   }, [stock, industries, isOpen]);
 
@@ -82,6 +90,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setActiveTab('details');
+      setEditError(null);
     }
   }, [isOpen, stock?.StockId]);
 
@@ -137,27 +146,52 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
 
   const handleSaveStock = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!symbol.trim() || !companyName.trim() || isSaving) return;
+    setEditError(null);
+    const trimmedMkt = mktSymbol.trim().toUpperCase();
+    if (!symbol.trim()) {
+      setEditError('Stock Symbol is required.');
+      return;
+    }
+    if (!trimmedMkt) {
+      setEditError('Market Ticker (MktSymbol) is required and must be unique.');
+      return;
+    }
+    if (!companyName.trim()) {
+      setEditError('Company Name is required.');
+      return;
+    }
 
+    // Check MktSymbol uniqueness across all other stocks
+    const duplicateMkt = stocks.find(s => 
+      s.StockId.trim().toUpperCase() !== stock.StockId.trim().toUpperCase() && 
+      (s.MktSymbol || '').trim().toUpperCase() === trimmedMkt
+    );
+    if (duplicateMkt) {
+      setEditError(`Market Ticker "${trimmedMkt}" is already in use by ${duplicateMkt.Symbol} (${duplicateMkt.StockId}). Market Ticker must be unique.`);
+      return;
+    }
+
+    if (isSaving) return;
     setIsSaving(true);
     try {
       const updatedStock: Stock = {
         ...stock,
         Symbol: symbol.toUpperCase().trim(),
-        MktSymbol: mktSymbol.toUpperCase().trim(),
+        MktSymbol: trimmedMkt,
         CompanyName: companyName.trim(),
         IndustryId: industryId || 'IND0002',
         Exchange: derivedExchange,
         Liverate: stock.Liverate,
         CurrentPrice: stock.Liverate || stock.CurrentPrice,
         DividendYield: parseFloat(dividendYield) || 0,
-        LastUpdated: new Date().toISOString(),
+        LastUpdated: getTodayDateOnly(),
       };
 
       await onSave(updatedStock);
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving stock:', err);
+      setEditError(err?.message || 'Failed to update stock. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -186,14 +220,16 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 <Edit3 className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
-                  <span>Edit Stock: {stock.Symbol}</span>
-                  <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-slate-800 text-cyan-400 border border-slate-700">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                    Edit Stock: {stock.Symbol}
+                  </h2>
+                  <span className="font-mono text-xs font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-2 py-0.5 rounded-lg">
                     {stock.StockId}
                   </span>
-                </h2>
+                </div>
                 <p className="text-xs text-slate-400">
-                  {stock.CompanyName} • {stock.Exchange || derivedExchange}
+                  {stock.CompanyName}
                 </p>
               </div>
             </div>
@@ -220,6 +256,19 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
             >
               <Sliders className="w-3.5 h-3.5" />
               <span>Stock Details</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('analytics')}
+              className={`px-3.5 py-2.5 text-xs font-semibold rounded-t-xl transition flex items-center gap-2 border-b-2 cursor-pointer touch-manipulation min-h-[40px] whitespace-nowrap ${
+                activeTab === 'analytics'
+                  ? 'text-cyan-400 border-cyan-400 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Analytics</span>
             </button>
 
             <button
@@ -270,52 +319,59 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
           {/* TAB 1: Stock Details */}
           {activeTab === 'details' && (
             <form onSubmit={handleSaveStock} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {editError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300 font-medium">
+                  {editError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Stock ID
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                    <span>Stock ID</span>
+                    <span className="text-[10px] text-slate-500 font-normal uppercase tracking-wider">Disabled (Unique)</span>
                   </label>
-                  <div className="w-full min-h-[44px] bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5 text-base sm:text-sm font-mono font-bold text-slate-400 cursor-not-allowed flex items-center">
-                    {stock.StockId}
-                  </div>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.StockId}
+                    className="w-full min-h-[44px] bg-slate-950/70 border border-slate-800 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-cyan-400 font-bold font-mono cursor-not-allowed select-none opacity-80"
+                    title="Stock ID is read-only and cannot be changed"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Symbol
+                    Symbol <span className="text-cyan-400">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={symbol}
-                    onChange={e => handleSymbolChange(e.target.value)}
+                    onChange={e => {
+                      setEditError(null);
+                      handleSymbolChange(e.target.value);
+                    }}
                     placeholder="e.g. RELIANCE"
                     className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-bold uppercase focus:outline-none focus:border-cyan-500 font-mono"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Market Ticker
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center justify-between">
+                    <span>Market Ticker <span className="text-cyan-400">*</span></span>
+                    <span className="text-[10px] text-cyan-400 font-mono">Unique</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={mktSymbol}
-                    onChange={e => setMktSymbol(e.target.value.toUpperCase())}
+                    onChange={e => {
+                      setEditError(null);
+                      setMktSymbol(e.target.value.toUpperCase().trim());
+                    }}
                     placeholder="e.g. RELIANCE.NSE"
                     className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-mono uppercase focus:outline-none focus:border-cyan-500"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Exchange
-                  </label>
-                  <div className="w-full min-h-[44px] bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5 text-base sm:text-sm font-mono font-bold text-amber-300 flex items-center justify-between">
-                    <span>{derivedExchange}</span>
-                    <span className="text-xs font-normal text-slate-400 font-sans">Market</span>
-                  </div>
                 </div>
               </div>
 
@@ -369,73 +425,6 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 </div>
               </div>
 
-              {/* Market Key Metrics */}
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <div className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                  Market Snapshot
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">52Wk High</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.High52 ? formatINR(stock.High52) : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">52Wk Low</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.Low52 ? formatINR(stock.Low52) : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Close Yesterday</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.CloseYest ? formatINR(stock.CloseYest) : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Day Change</div>
-                    <div
-                      className={`font-mono font-semibold mt-0.5 ${
-                        stock.ChangePct !== undefined
-                          ? stock.ChangePct >= 0
-                            ? 'text-emerald-400'
-                            : 'text-rose-400'
-                          : 'text-slate-200'
-                      }`}
-                    >
-                      {stock.ChangePct !== undefined
-                        ? `${stock.ChangePct >= 0 ? '+' : ''}${stock.ChangePct.toFixed(2)}%`
-                        : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">P/E Ratio</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.Pe ? stock.Pe.toFixed(2) : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">EPS</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.Eps ? formatINR(stock.Eps) : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Volume</div>
-                    <div className="font-mono font-semibold text-slate-200 mt-0.5">
-                      {stock.Volume ? stock.Volume.toLocaleString() : '—'}
-                    </div>
-                  </div>
-                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
-                    <div className="text-[10px] text-slate-400">Dividend Yield</div>
-                    <div className="font-mono font-semibold text-cyan-400 mt-0.5">
-                      {stock.DividendYield !== undefined ? `${stock.DividendYield}%` : '—'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                   Dividend Yield (%)
@@ -478,6 +467,157 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 </button>
               </div>
             </form>
+          )}
+
+          {/* TAB 2: Analytics (Read-only formulas from Google Sheets & Market data) */}
+          {activeTab === 'analytics' && (
+            <div className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1">
+              {/* Header notification */}
+              <div className="flex items-center justify-between p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Formula & Market Analytics</h4>
+                    <p className="text-[11px] text-slate-400">
+                      Live metrics calculated via Google Sheets formulas. All fields are strictly read-only.
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700/80 uppercase">
+                  Read Only
+                </span>
+              </div>
+
+              {/* Read-only Form Fields Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+                {/* 1. volume */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>Volume</span>
+                    <span className="text-[10px] text-slate-500 font-mono">volume</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.Volume !== undefined && stock.Volume !== null ? Number(stock.Volume).toLocaleString() : '—'}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="Trading volume (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Live market trading volume</span>
+                </div>
+
+                {/* 2. 52WkHigh */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>52-Week High (₹)</span>
+                    <span className="text-[10px] text-emerald-400/80 font-mono">52WkHigh</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.High52 !== undefined && stock.High52 !== null ? formatINR(stock.High52) : '—'}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-emerald-400 font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="52-Week High price (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">52-week peak trading price</span>
+                </div>
+
+                {/* 3. 52WkLow */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>52-Week Low (₹)</span>
+                    <span className="text-[10px] text-rose-400/80 font-mono">52WkLow</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.Low52 !== undefined && stock.Low52 !== null ? formatINR(stock.Low52) : '—'}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-rose-400 font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="52-Week Low price (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">52-week trough trading price</span>
+                </div>
+
+                {/* 4. shares */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>Shares</span>
+                    <span className="text-[10px] text-cyan-400/80 font-mono">shares</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={(stock.SharesFormula ?? (stock as any).totalQuantity ?? 0).toLocaleString()}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="Aggregated shares formula (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Calculated from Purchases sheet</span>
+                </div>
+
+                {/* 5. changepct */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>Change %</span>
+                    <span className="text-[10px] text-slate-500 font-mono">changepct</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={
+                      stock.ChangePct !== undefined && stock.ChangePct !== null
+                        ? `${stock.ChangePct >= 0 ? '+' : ''}${Number(stock.ChangePct).toFixed(2)}%`
+                        : '—'
+                    }
+                    className={`w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm font-mono font-bold cursor-not-allowed select-none opacity-90 ${
+                      (stock.ChangePct ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                    title="Daily change percentage (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Day market percentage movement</span>
+                </div>
+
+                {/* 6. eps */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>EPS (Earnings Per Share)</span>
+                    <span className="text-[10px] text-slate-500 font-mono">eps</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.Eps !== undefined && stock.Eps !== null ? Number(stock.Eps).toFixed(2) : '—'}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-cyan-300 font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="Earnings per share (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Trailing 12-month EPS</span>
+                </div>
+
+                {/* 7. pe */}
+                <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                    <span>P/E Ratio</span>
+                    <span className="text-[10px] text-slate-500 font-mono">pe</span>
+                  </label>
+                  <input
+                    type="text"
+                    disabled
+                    readOnly
+                    value={stock.Pe !== undefined && stock.Pe !== null ? Number(stock.Pe).toFixed(2) : '—'}
+                    className="w-full min-h-[42px] bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm text-amber-300 font-mono font-bold cursor-not-allowed select-none opacity-90"
+                    title="Price-to-Earnings ratio (read-only)"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Valuation price-to-earnings ratio</span>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* TAB 2: Purchases List with Date, Price, Quantity */}
@@ -543,9 +683,6 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                                 day: 'numeric',
                               })
                             : p.PurchaseDate;
-                          const timeStr = !isNaN(dateObj.getTime())
-                            ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                            : '';
 
                           return (
                             <tr
@@ -557,18 +694,11 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleOpenPurchaseEdit(p)}
-                                  className="text-cyan-400 hover:text-cyan-300 font-semibold underline underline-offset-4 decoration-cyan-500/40 hover:decoration-cyan-400 flex flex-col items-start cursor-pointer text-left transition group-hover:text-cyan-300"
-                                  title={`Click to edit purchase ${p.PurchaseId}`}
+                                  className="text-cyan-400 hover:text-cyan-300 font-semibold underline underline-offset-4 decoration-cyan-500/40 hover:decoration-cyan-400 flex items-center gap-1.5 cursor-pointer text-left transition group-hover:text-cyan-300"
+                                  title="Click to edit purchase"
                                 >
-                                  <span className="flex items-center gap-1.5 font-medium">
-                                    <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                                    <span>{dateStr}</span>
-                                  </span>
-                                  {timeStr && (
-                                    <span className="text-[10px] text-slate-500 font-mono pl-5">
-                                      {timeStr} • {p.PurchaseId}
-                                    </span>
-                                  )}
+                                  <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                                  <span>{dateStr}</span>
                                 </button>
                               </td>
 
@@ -633,9 +763,6 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                               <Calendar className="w-4 h-4 text-cyan-400" />
                               <span>{dateStr}</span>
                             </button>
-                            <span className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                              {p.PurchaseId}
-                            </span>
                           </div>
 
                           <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-900">
@@ -735,9 +862,6 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                                 day: 'numeric',
                               })
                             : s.SaleDate;
-                          const timeStr = !isNaN(dateObj.getTime())
-                            ? dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                            : '';
 
                           const activeSaleId = s.SaleId || s.SalesId;
                           const saleRate = s.SalePrice || s.Rate || 0;
@@ -753,18 +877,11 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleOpenSaleEdit(s)}
-                                  className="text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-4 decoration-amber-500/40 hover:decoration-amber-400 flex flex-col items-start cursor-pointer text-left transition group-hover:text-amber-300"
-                                  title={`Click to edit sale ${activeSaleId}`}
+                                  className="text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-4 decoration-amber-500/40 hover:decoration-amber-400 flex items-center gap-1.5 cursor-pointer text-left transition group-hover:text-amber-300"
+                                  title="Click to edit sale"
                                 >
-                                  <span className="flex items-center gap-1.5 font-medium">
-                                    <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                                    <span>{dateStr}</span>
-                                  </span>
-                                  {timeStr && (
-                                    <span className="text-[10px] text-slate-500 font-mono pl-5">
-                                      {timeStr} • {activeSaleId}
-                                    </span>
-                                  )}
+                                  <Calendar className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                  <span>{dateStr}</span>
                                 </button>
                               </td>
 
@@ -832,9 +949,6 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                               <Calendar className="w-4 h-4 text-amber-400" />
                               <span>{dateStr}</span>
                             </button>
-                            <span className="text-[11px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                              {activeSaleId}
-                            </span>
                           </div>
 
                           <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-900">
