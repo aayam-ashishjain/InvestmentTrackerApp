@@ -1,10 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { User } from 'firebase/auth';
-import { 
-  initAuth, 
-  googleSignIn, 
-  logout 
-} from './services/auth';
+import { GoogleUser, googleSignIn, logout } from './services/googleOAuth';
 import { 
   findInvestmentSpreadsheet, 
   createInvestmentSpreadsheet, 
@@ -41,9 +36,9 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<GoogleUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Spreadsheet Database State
@@ -130,25 +125,6 @@ export default function App() {
     }
   };
 
-  // Initialize Auth state listener on app load
-  useEffect(() => {
-    const unsubscribe = initAuth(
-      (currentUser, currentToken) => {
-        setUser(currentUser);
-        setToken(currentToken);
-        setIsAuthLoading(false);
-        setupSpreadsheet(currentToken);
-      },
-      () => {
-        setUser(null);
-        setToken(null);
-        setIsAuthLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [setupSpreadsheet]);
-
   const handleSignIn = async () => {
     setIsAuthLoading(true);
     setAuthError(null);
@@ -168,13 +144,16 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await logout();
-    setUser(null);
-    setToken(null);
-    setSpreadsheetId(null);
-    setStocks([]);
-    setPurchases([]);
-    setSales([]);
+    try {
+      await logout(token);
+    } finally {
+      setUser(null);
+      setToken(null);
+      setSpreadsheetId(null);
+      setStocks([]);
+      setPurchases([]);
+      setSales([]);
+    }
   };
 
   // Real-time Purchase transaction execution (fast and immediate)

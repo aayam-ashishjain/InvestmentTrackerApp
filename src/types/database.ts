@@ -100,9 +100,10 @@ export interface EnrichedStock extends Stock {
   totalQuantity: number;        // Active remaining quantity owned (Purchased - Sold)
   totalPurchasedQuantity: number; // Total shares purchased
   totalSoldQuantity: number;    // Total shares sold
-  totalInvested: number;        // Sum of TotalAmount from Purchases with this StockId (INR)
-  activeCostBasis: number;      // Remaining shares * avg purchase price
-  averagePurchasePrice: number; // TotalInvested / TotalPurchasedQuantity (INR)
+  totalInvested: number;        // Sum of remaining quantity * purchase price across purchase lots (INR)
+  cumulativeInvested: number;   // Historical sum of TotalAmount across all purchase lots (INR)
+  activeCostBasis: number;      // Sum of remaining quantity * purchase price across purchase lots (INR)
+  averagePurchasePrice: number; // Weighted average purchase price of remaining shares (INR)
   currentHoldingValue: number;  // TotalQuantity * Liverate (INR)
   unrealizedGainLoss: number;   // CurrentHoldingValue - ActiveCostBasis (INR)
   unrealizedGainLossPercent: number;

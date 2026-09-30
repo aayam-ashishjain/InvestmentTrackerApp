@@ -551,6 +551,7 @@ export function aggregateStockHoldings(
 ): EnrichedStock[] {
   const purchasesByStockId = new Map<string, Purchase[]>();
   const salesByStockId = new Map<string, Sale[]>();
+  const soldQuantityByPurchaseId = new Map<string, number>();
   const industryMap = new Map(industries.map(i => [i.IndustryId.trim().toUpperCase(), i.Name]));
   const purchaseMap = new Map(purchases.map(p => [p.PurchaseId.trim().toUpperCase(), p]));
 
@@ -562,7 +563,12 @@ export function aggregateStockHoldings(
   });
 
   sales.forEach(s => {
-    const purchase = purchaseMap.get((s.PurchaseId || '').trim().toUpperCase());
+    const purchaseId = (s.PurchaseId || '').trim().toUpperCase();
+    const purchase = purchaseMap.get(purchaseId);
+    soldQuantityByPurchaseId.set(
+      purchaseId,
+      (soldQuantityByPurchaseId.get(purchaseId) || 0) + s.Quantity
+    );
     const stockId = (s.StockId || purchase?.StockId || '').trim().toUpperCase();
     const list = salesByStockId.get(stockId) || [];
     list.push(s);
@@ -578,13 +584,18 @@ export function aggregateStockHoldings(
 
     const totalPurchasedQuantity = stockPurchases.reduce((sum, p) => sum + p.Quantity, 0);
     const totalSoldQuantity = stockSales.reduce((sum, s) => sum + s.Quantity, 0);
-    const totalQuantity = Math.max(0, totalPurchasedQuantity - totalSoldQuantity);
+    const totalQuantity = totalPurchasedQuantity - totalSoldQuantity;
+    const activeCostBasis = stockPurchases.reduce((sum, purchase) => {
+      const purchaseId = purchase.PurchaseId.trim().toUpperCase();
+      const soldQuantity = soldQuantityByPurchaseId.get(purchaseId) || 0;
+      const remainingQuantity = Math.max(0, purchase.Quantity - soldQuantity);
+      return sum + remainingQuantity * purchase.PurchasePrice;
+    }, 0);
+    const totalInvested = activeCostBasis;
+    const cumulativeInvested = stockPurchases.reduce((sum, purchase) => sum + purchase.TotalAmount, 0);
+    const averagePurchasePrice = totalQuantity > 0 ? activeCostBasis / totalQuantity : 0;
 
-    const totalInvested = stockPurchases.reduce((sum, p) => sum + p.TotalAmount, 0);
-    const averagePurchasePrice = totalPurchasedQuantity > 0 ? totalInvested / totalPurchasedQuantity : 0;
-    const activeCostBasis = totalQuantity * averagePurchasePrice;
-
-    const livePrice = stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice;
+    const livePrice = stock.Liverate;
     const currentHoldingValue = totalQuantity * livePrice;
     const unrealizedGainLoss = currentHoldingValue - activeCostBasis;
     const unrealizedGainLossPercent = activeCostBasis > 0 ? (unrealizedGainLoss / activeCostBasis) * 100 : 0;
@@ -610,6 +621,7 @@ export function aggregateStockHoldings(
       totalPurchasedQuantity,
       totalSoldQuantity,
       totalInvested,
+      cumulativeInvested,
       activeCostBasis,
       averagePurchasePrice,
       currentHoldingValue,

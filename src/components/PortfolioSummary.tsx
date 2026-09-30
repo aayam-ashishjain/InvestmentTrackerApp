@@ -29,15 +29,15 @@ export const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({
     0
   );
 
-  // 2. Total Invested Amount: Active cost basis for currently held shares, or fallback to total invested
+  // 2. Total Invested Amount: Cost basis of the unsold shares in each purchase lot
   const totalInvestedAmount = enrichedStocks.reduce(
-    (sum, stock) => sum + (stock.activeCostBasis > 0 ? stock.activeCostBasis : (stock.totalQuantity > 0 ? stock.totalInvested : 0)),
+    (sum, stock) => sum + stock.activeCostBasis,
     0
   );
 
   // Cumulative total invested across all historical purchases
   const totalCumulativeInvested = enrichedStocks.reduce(
-    (sum, stock) => sum + (stock.totalInvested || 0),
+    (sum, stock) => sum + stock.cumulativeInvested,
     0
   );
 

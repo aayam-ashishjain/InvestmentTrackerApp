@@ -11,6 +11,9 @@ import {
   ExternalLink, 
   Activity, 
   Layers, 
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ArrowUpRight, 
   ArrowDownRight, 
   Tag,
@@ -66,6 +69,30 @@ interface PortfolioDashboardProps {
   onUpdateStock: (stock: Stock) => Promise<void>;
 }
 
+type StockSortKey =
+  | 'StockId'
+  | 'Symbol'
+  | 'CompanyName'
+  | 'industryName'
+  | 'Liverate'
+  | 'totalQuantity'
+  | 'averagePurchasePrice'
+  | 'totalInvested'
+  | 'currentHoldingValue'
+  | 'unrealizedGainLoss';
+
+function getStockSortValue(stock: EnrichedStock, key: StockSortKey): string | number {
+  switch (key) {
+    case 'StockId':
+    case 'Symbol':
+    case 'CompanyName':
+    case 'industryName':
+      return stock[key] || '';
+    default:
+      return stock[key];
+  }
+}
+
 export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   spreadsheetId,
   spreadsheetName,
@@ -89,6 +116,10 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'stocks' | 'purchases' | 'sales' | 'schema'>('stocks');
   const [selectedStockFilter, setSelectedStockFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [stockSort, setStockSort] = useState<{
+    key: StockSortKey;
+    direction: 'asc' | 'desc';
+  } | null>(null);
   
   // Purchase Modal state
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
@@ -169,6 +200,43 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
     return matchesFilter && matchesSearch;
   });
 
+  const sortedStocks = stockSort
+    ? [...filteredStocks].sort((left, right) => {
+        const leftValue = getStockSortValue(left, stockSort.key);
+        const rightValue = getStockSortValue(right, stockSort.key);
+        const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+          ? leftValue - rightValue
+          : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: 'base' });
+        return stockSort.direction === 'asc' ? comparison : -comparison;
+      })
+    : filteredStocks;
+
+  const sortableHeader = (label: string, key: StockSortKey, alignRight = false) => {
+    const isActive = stockSort?.key === key;
+    return (
+      <th
+        className={`py-3 px-4 ${alignRight ? 'text-right' : 'text-left'}`}
+        aria-sort={isActive ? (stockSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <button
+          type="button"
+          onClick={() => setStockSort(current =>
+            current?.key === key
+              ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+              : { key, direction: 'asc' }
+          )}
+          className={`inline-flex items-center gap-1.5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${alignRight ? 'ml-auto' : ''}`}
+          aria-label={`Sort by ${label}${isActive ? `, ${stockSort.direction === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+        >
+          <span>{label}</span>
+          {isActive
+            ? stockSort.direction === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />
+            : <ArrowUpDown className="w-3.5 h-3.5 opacity-50" />}
+        </button>
+      </th>
+    );
+  };
+
   const filteredPurchases = enrichedPurchases.filter(p => {
     const matchesFilter = selectedStockFilter === 'ALL' || p.StockId === selectedStockFilter;
     const matchesSearch = !searchQuery || 
@@ -193,7 +261,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   });
 
   // Overall Portfolio Aggregates in INR
-  const totalInvested = enrichedStocks.reduce((sum, s) => sum + (s.activeCostBasis > 0 ? s.activeCostBasis : s.totalInvested), 0);
+  const totalInvested = enrichedStocks.reduce((sum, s) => sum + s.activeCostBasis, 0);
   const totalCurrentValue = enrichedStocks.reduce((sum, s) => sum + s.currentHoldingValue, 0);
   const totalUnrealizedGain = totalCurrentValue - totalInvested;
   const totalUnrealizedGainPercent = totalInvested > 0 ? (totalUnrealizedGain / totalInvested) * 100 : 0;
@@ -460,7 +528,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
       </div>
 
       {/* Main Content Area */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+      <div className="dashboard-data-scroll bg-slate-900 border border-slate-800 rounded-2xl shadow-xl max-h-[58dvh] overflow-y-auto overscroll-contain">
         {/* TAB 1: MAIN TABLE - STOCKS */}
         {activeTab === 'stocks' && (
           <div>
@@ -491,7 +559,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
               <>
                 {/* Mobile Card List (< md screens) */}
                 <div className="md:hidden divide-y divide-slate-800">
-                  {filteredStocks.map((stock, idx) => {
+                  {sortedStocks.map((stock, idx) => {
                     const isProfit = stock.unrealizedGainLoss >= 0;
                     const hasPurchases = stock.totalQuantity > 0;
                     return (
@@ -515,7 +583,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                           </div>
                           <div className="text-right">
                             <div className="text-base font-mono font-bold text-emerald-400">
-                              {formatINR(stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice)}
+                              {formatINR(stock.Liverate)}
                             </div>
                           </div>
                         </div>
@@ -523,7 +591,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                         {hasPurchases && (
                           <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-center text-xs">
                             <div>
-                              <span className="text-[10px] text-slate-400 block uppercase">Shares</span>
+                              <span className="text-[10px] text-slate-400 block uppercase">Quantity</span>
                               <span className="font-mono font-semibold text-white">{stock.totalQuantity.toLocaleString()}</span>
                             </div>
                             <div>
@@ -561,22 +629,24 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                   <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-slate-950/60 text-slate-400 font-semibold border-b border-slate-800 uppercase tracking-wider">
                     <tr>
-                      <th className="py-3 px-4">Stock ID</th>
-                      <th className="py-3 px-4">Symbol</th>
-                      <th className="py-3 px-4">Company Name</th>
-                      <th className="py-3 px-4">Industry</th>
-                      <th className="py-3 px-4 text-right">Price (₹)</th>
-                      <th className="py-3 px-4 text-right">Avg Cost (₹)</th>
-                      <th className="py-3 px-4 text-right">Invested (₹)</th>
-                      <th className="py-3 px-4 text-right">Market Value (₹)</th>
-                      <th className="py-3 px-4 text-right">Profit / Loss</th>
+                      {sortableHeader('Stock ID', 'StockId')}
+                      {sortableHeader('Symbol', 'Symbol')}
+                      {sortableHeader('Company Name', 'CompanyName')}
+                      {sortableHeader('Industry', 'industryName')}
+                      {sortableHeader('Price (₹)', 'Liverate', true)}
+                      {sortableHeader('Quantity', 'totalQuantity', true)}
+                      {sortableHeader('Market Value (₹)', 'currentHoldingValue', true)}
+                      {sortableHeader('Avg Cost (₹)', 'averagePurchasePrice', true)}
+                      {sortableHeader('Invested (₹)', 'totalInvested', true)}
+                      {sortableHeader('Profit / Loss', 'unrealizedGainLoss', true)}
                       <th className="py-3 px-4 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-medium">
-                    {filteredStocks.map((stock, idx) => {
+                    {sortedStocks.map((stock, idx) => {
                       const isProfit = stock.unrealizedGainLoss >= 0;
                       const hasPurchases = stock.totalQuantity > 0;
+                      const hasPurchaseHistory = stock.purchaseCount > 0;
 
                       return (
                         <tr key={`${stock.StockId}_${idx}`} className="hover:bg-slate-800/40 transition group">
@@ -621,17 +691,20 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                           <td className="py-3 px-4 text-right font-mono font-bold text-emerald-400 text-sm">
                             <div className="flex items-center justify-end gap-1.5">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                              <span>{formatINR(stock.Liverate > 0 ? stock.Liverate : stock.CurrentPrice)}</span>
+                              <span>{formatINR(stock.Liverate)}</span>
                             </div>
                           </td>
-                          <td className="py-3 px-4 text-right font-mono text-slate-300">
-                            {hasPurchases ? formatINR(stock.averagePurchasePrice) : '—'}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono text-slate-200 font-semibold">
-                            {hasPurchases ? formatINR(stock.totalInvested) : '—'}
+                          <td className="py-3 px-4 text-right font-mono font-semibold text-white">
+                            {stock.totalQuantity.toLocaleString()}
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-white font-bold text-sm">
                             {hasPurchases ? formatINR(stock.currentHoldingValue) : '₹0.00'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-300">
+                            {hasPurchaseHistory ? formatINR(stock.averagePurchasePrice) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-200 font-semibold">
+                            {hasPurchaseHistory ? formatINR(stock.totalInvested) : '—'}
                           </td>
                           <td className="py-3 px-4 text-right">
                             {hasPurchases ? (
