@@ -9,7 +9,11 @@
 export interface Industry {
   IndustryId: string; // Primary Key (e.g. IND0001, IND0002)
   Name: string;       // Display Name (e.g. "Information Technology", "Banking & Finance")
+  Suggested: number;  // Suggested share of total portfolio corpus, as a percentage
 }
+
+export const STOCK_CAPITALIZATIONS = ['Bluechip', 'Next 50', 'Midcap', 'Small cap', 'Micro Cap'] as const;
+export type StockCapitalization = typeof STOCK_CAPITALIZATIONS[number];
 
 export interface Stock {
   StockId: string;       // Primary Key (e.g. STK0001) - User customizable in Add Stock
@@ -31,6 +35,8 @@ export interface Stock {
   Pe?: number;           // Price-to-Earnings ratio (pe formula)
   Currency: string;      // Default 'INR'
   DividendYield: number; // e.g. 0.85%
+  SuggestedInvestment: number; // Investor's suggested allocation amount in INR
+  Capitalization: StockCapitalization | ''; // Company capitalization category
   LastUpdated: string;   // ISO timestamp
 }
 
@@ -57,6 +63,15 @@ export interface Sale {
   TotalAmount: number;   // Gross Amount (Quantity * SalePrice) or Net Amount in INR
   Fees: number;          // Brokerage / STT / Transaction fees in INR
   Notes?: string;        // Notes/rationale
+}
+
+export interface Dividend {
+  DividendId: string;
+  StockId: string;       // Foreign Key referencing Stocks.StockId
+  Date: string;          // Dividend payment/record date, YYYY-MM-DD
+  Quantity: number;
+  PerStock: number;      // Dividend per share in INR
+  TotalDividend: number; // Total dividend amount in INR
 }
 
 // Joined View Models
@@ -101,7 +116,8 @@ export interface EnrichedStock extends Stock {
   totalPurchasedQuantity: number; // Total shares purchased
   totalSoldQuantity: number;    // Total shares sold
   totalInvested: number;        // Sum of remaining quantity * purchase price across purchase lots (INR)
-  cumulativeInvested: number;   // Historical sum of TotalAmount across all purchase lots (INR)
+  cumulativeInvested: number;   // Historical sum of Quantity * PurchasePrice across all purchase lots (INR)
+  totalSales: number;           // Historical sum of Quantity * SalePrice across all sale records (INR)
   activeCostBasis: number;      // Sum of remaining quantity * purchase price across purchase lots (INR)
   averagePurchasePrice: number; // Weighted average purchase price of remaining shares (INR)
   currentHoldingValue: number;  // TotalQuantity * Liverate (INR)
@@ -272,31 +288,31 @@ export interface SheetSchemaDefinition {
 }
 
 export const DEFAULT_INDUSTRIES: Industry[] = [
-  { IndustryId: 'IND0001', Name: 'Energy & Telecom' },
-  { IndustryId: 'IND0002', Name: 'Information Technology' },
-  { IndustryId: 'IND0003', Name: 'Banking & Finance' },
-  { IndustryId: 'IND0004', Name: 'Automotive' },
-  { IndustryId: 'IND0005', Name: 'Consumer Goods (FMCG)' },
-  { IndustryId: 'IND0006', Name: 'Engineering & Infrastructure' },
-  { IndustryId: 'IND0007', Name: 'Pharmaceuticals & Healthcare' },
-  { IndustryId: 'IND0008', Name: 'Metals & Mining' },
-  { IndustryId: 'IND0009', Name: 'Real Estate & Construction' }
+  { IndustryId: 'IND0001', Name: 'Energy & Telecom', Suggested: 0 },
+  { IndustryId: 'IND0002', Name: 'Information Technology', Suggested: 0 },
+  { IndustryId: 'IND0003', Name: 'Banking & Finance', Suggested: 0 },
+  { IndustryId: 'IND0004', Name: 'Automotive', Suggested: 0 },
+  { IndustryId: 'IND0005', Name: 'Consumer Goods (FMCG)', Suggested: 0 },
+  { IndustryId: 'IND0006', Name: 'Engineering & Infrastructure', Suggested: 0 },
+  { IndustryId: 'IND0007', Name: 'Pharmaceuticals & Healthcare', Suggested: 0 },
+  { IndustryId: 'IND0008', Name: 'Metals & Mining', Suggested: 0 },
+  { IndustryId: 'IND0009', Name: 'Real Estate & Construction', Suggested: 0 }
 ];
 
 export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
   {
     title: 'Industry',
-    headers: ['IndustryId', 'Name'],
+    headers: ['IndustryId', 'Name', 'Suggested'],
     sampleRows: [
-      ['IND0001', 'Energy & Telecom'],
-      ['IND0002', 'Information Technology'],
-      ['IND0003', 'Banking & Finance'],
-      ['IND0004', 'Automotive'],
-      ['IND0005', 'Consumer Goods (FMCG)'],
-      ['IND0006', 'Engineering & Infrastructure'],
-      ['IND0007', 'Pharmaceuticals & Healthcare'],
-      ['IND0008', 'Metals & Mining'],
-      ['IND0009', 'Real Estate & Construction']
+      ['IND0001', 'Energy & Telecom', 0],
+      ['IND0002', 'Information Technology', 0],
+      ['IND0003', 'Banking & Finance', 0],
+      ['IND0004', 'Automotive', 0],
+      ['IND0005', 'Consumer Goods (FMCG)', 0],
+      ['IND0006', 'Engineering & Infrastructure', 0],
+      ['IND0007', 'Pharmaceuticals & Healthcare', 0],
+      ['IND0008', 'Metals & Mining', 0],
+      ['IND0009', 'Real Estate & Construction', 0]
     ]
   },
   {
@@ -319,7 +335,9 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
       'pe', 
       'Currency', 
       'DividendYield', 
-      'LastUpdated'
+      'LastUpdated',
+      'SuggestedInvestment',
+      'Capitalization'
     ],
     sampleRows: [
       [
@@ -333,7 +351,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C2,"changepct"),0.52)',
         '=IFERROR(GOOGLEFINANCE(C2,"eps"),102.50)',
         '=IFERROR(GOOGLEFINANCE(C2,"pe"),29.07)',
-        'INR', 0.35, getTodayDateOnly()
+        'INR', 0.35, getTodayDateOnly(), 100000, 'Bluechip'
       ],
       [
         'STK0002', 'TCS', 'TCS.NSE', 'Tata Consultancy Services Ltd.', 'IND0002', 'NSE',
@@ -346,7 +364,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C3,"changepct"),0.83)',
         '=IFERROR(GOOGLEFINANCE(C3,"eps"),128.40)',
         '=IFERROR(GOOGLEFINANCE(C3,"pe"),33.10)',
-        'INR', 1.15, getTodayDateOnly()
+        'INR', 1.15, getTodayDateOnly(), 75000, 'Bluechip'
       ],
       [
         'STK0003', 'HDFCBANK', 'HDFCBANK.NSE', 'HDFC Bank Ltd.', 'IND0003', 'NSE',
@@ -359,7 +377,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C4,"changepct"),-0.47)',
         '=IFERROR(GOOGLEFINANCE(C4,"eps"),85.20)',
         '=IFERROR(GOOGLEFINANCE(C4,"pe"),19.25)',
-        'INR', 1.20, getTodayDateOnly()
+        'INR', 1.20, getTodayDateOnly(), 50000, 'Bluechip'
       ],
       [
         'STK0004', 'INFY', 'INFY.NSE', 'Infosys Ltd.', 'IND0002', 'NSE',
@@ -372,7 +390,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C5,"changepct"),0.84)',
         '=IFERROR(GOOGLEFINANCE(C5,"eps"),63.15)',
         '=IFERROR(GOOGLEFINANCE(C5,"pe"),29.94)',
-        'INR', 2.10, getTodayDateOnly()
+        'INR', 2.10, getTodayDateOnly(), 40000, 'Bluechip'
       ],
       [
         'STK0005', 'ICICIBANK', 'ICICIBANK.NSE', 'ICICI Bank Ltd.', 'IND0003', 'NSE',
@@ -385,7 +403,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C6,"changepct"),0.69)',
         '=IFERROR(GOOGLEFINANCE(C6,"eps"),59.80)',
         '=IFERROR(GOOGLEFINANCE(C6,"pe"),20.40)',
-        'INR', 0.85, getTodayDateOnly()
+        'INR', 0.85, getTodayDateOnly(), 35000, 'Bluechip'
       ],
       [
         'STK0006', 'TATAMOTORS', 'TATAMOTORS.NSE', 'Tata Motors Ltd.', 'IND0004', 'NSE',
@@ -398,7 +416,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C7,"changepct"),-1.25)',
         '=IFERROR(GOOGLEFINANCE(C7,"eps"),82.40)',
         '=IFERROR(GOOGLEFINANCE(C7,"pe"),11.84)',
-        'INR', 0.60, getTodayDateOnly()
+        'INR', 0.60, getTodayDateOnly(), 30000, 'Midcap'
       ],
       [
         'STK0007', 'ITC', 'ITC.BSE', 'ITC Ltd.', 'IND0005', 'BSE',
@@ -411,7 +429,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C8,"changepct"),0.85)',
         '=IFERROR(GOOGLEFINANCE(C8,"eps"),16.80)',
         '=IFERROR(GOOGLEFINANCE(C8,"pe"),30.37)',
-        'INR', 2.75, getTodayDateOnly()
+        'INR', 2.75, getTodayDateOnly(), 25000, 'Bluechip'
       ],
       [
         'STK0008', 'LT', 'LT.NSE', 'Larsen & Toubro Ltd.', 'IND0006', 'NSE',
@@ -424,7 +442,7 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
         '=IFERROR(GOOGLEFINANCE(C9,"changepct"),0.42)',
         '=IFERROR(GOOGLEFINANCE(C9,"eps"),94.60)',
         '=IFERROR(GOOGLEFINANCE(C9,"pe"),38.26)',
-        'INR', 0.95, getTodayDateOnly()
+        'INR', 0.95, getTodayDateOnly(), 20000, 'Midcap'
       ]
     ]
   },
@@ -446,5 +464,10 @@ export const INVESTMENT_SHEET_SCHEMAS: SheetSchemaDefinition[] = [
     sampleRows: [
       ['Sal00000001', 'Pur00000001', 'STK0001', '2025-02-10', 5, 2950.00, 14750.00, 20, 'Partial profit booking on Reliance']
     ]
+  },
+  {
+    title: 'Dividends',
+    headers: ['DividendId', 'StockId', 'Date', 'Quantity', 'PerStock', 'TotalDividend'],
+    sampleRows: [],
   }
 ];

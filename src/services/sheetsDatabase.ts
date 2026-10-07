@@ -1,9 +1,11 @@
 import { 
   INVESTMENT_SHEET_SCHEMAS, 
+  STOCK_CAPITALIZATIONS,
   Industry,
   Stock, 
   Purchase, 
   Sale,
+  Dividend,
   EnrichedPurchase, 
   EnrichedSale,
   EnrichedStock, 
@@ -84,14 +86,17 @@ export async function createInvestmentSpreadsheet(accessToken: string): Promise<
 
   const createdData = await createRes.json();
   const spreadsheetId = createdData.spreadsheetId;
+  if (!spreadsheetId) {
+    throw new Error('Google Sheets created a workbook but did not return its spreadsheet ID.');
+  }
 
-  // Populate headers and initial seed data for Industry, Stocks, and Purchases
+  // Populate every table header and its canonical seed rows.
   const valueData = INVESTMENT_SHEET_SCHEMAS.map(schema => ({
-    range: `${schema.title}!A1:${String.fromCharCode(65 + schema.headers.length - 1)}${schema.sampleRows.length + 1}`,
+    range: `${schema.title}!A1:${colIndexToLetter(schema.headers.length - 1)}${schema.sampleRows.length + 1}`,
     values: [schema.headers, ...schema.sampleRows],
   }));
 
-  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+  const populateRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -102,6 +107,10 @@ export async function createInvestmentSpreadsheet(accessToken: string): Promise<
       data: valueData,
     }),
   });
+  if (!populateRes.ok) {
+    const error = await populateRes.json();
+    throw new Error(`Spreadsheet was created but its tables could not be initialized: ${error?.error?.message || populateRes.statusText}`);
+  }
 
   await formatSpreadsheetTables(accessToken, spreadsheetId, createdData.sheets);
 
@@ -156,6 +165,14 @@ function parseNumericValue(val: any): number | undefined {
   return isNaN(num) ? undefined : num;
 }
 
+function getNormalizedField(record: Record<string, any>, names: string[]): any {
+  const normalizedNames = new Set(names.map(name => name.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  const match = Object.entries(record).find(([key]) =>
+    normalizedNames.has(key.toLowerCase().replace(/[^a-z0-9]/g, ''))
+  );
+  return match?.[1];
+}
+
 function colIndexToLetter(colIndex: number): string {
   let temp = colIndex;
   let letter = '';
@@ -204,13 +221,18 @@ export async function ensureRequiredSheets(accessToken: string, spreadsheetId: s
       body: JSON.stringify({ requests: addSheetRequests }),
     });
 
-    if (updateRes.ok) {
+    if (!updateRes.ok) {
+      const error = await updateRes.json();
+      throw new Error(`Failed to create required sheets: ${error?.error?.message || updateRes.statusText}`);
+    }
+
+    {
       const valueData = missingSchemas.map(schema => ({
-        range: `${schema.title}!A1:${String.fromCharCode(65 + schema.headers.length - 1)}${schema.sampleRows.length + 1}`,
+        range: `${schema.title}!A1:${colIndexToLetter(schema.headers.length - 1)}${schema.sampleRows.length + 1}`,
         values: [schema.headers, ...schema.sampleRows],
       }));
 
-      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+      const populateRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -221,6 +243,49 @@ export async function ensureRequiredSheets(accessToken: string, spreadsheetId: s
           data: valueData,
         }),
       });
+      if (!populateRes.ok) {
+        const error = await populateRes.json();
+        throw new Error(`Required sheets were created but their headers/data could not be initialized: ${error?.error?.message || populateRes.statusText}`);
+      }
+    }
+  }
+
+  const schemaMigrations = [
+    { title: 'Industry', newHeaders: ['Suggested'] },
+    { title: 'Stocks', newHeaders: ['SuggestedInvestment', 'Capitalization'] },
+  ];
+  for (const migration of schemaMigrations) {
+    if (!existingSheetTitles.has(migration.title)) continue;
+    const headersResponse = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${migration.title}!1:1`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!headersResponse.ok) continue;
+
+    const headerData = await headersResponse.json();
+    const existingHeaders: string[] = headerData.values?.[0]?.map((header: unknown) => String(header).trim()) || [];
+    const knownHeaders = new Set(existingHeaders.map(header => header.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    const missingHeaders = migration.newHeaders.filter(header =>
+      !knownHeaders.has(header.toLowerCase().replace(/[^a-z0-9]/g, ''))
+    );
+    if (missingHeaders.length === 0) continue;
+
+    const startColumn = existingHeaders.length;
+    const endColumn = startColumn + missingHeaders.length - 1;
+    const migrationRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${migration.title}!${colIndexToLetter(startColumn)}1:${colIndexToLetter(endColumn)}1?valueInputOption=RAW`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values: [missingHeaders] }),
+      }
+    );
+    if (!migrationRes.ok) {
+      const error = await migrationRes.json();
+      throw new Error(`Failed to add ${migration.title} columns: ${error?.error?.message || migrationRes.statusText}`);
     }
   }
 }
@@ -237,10 +302,11 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
   stocks: Stock[];
   purchases: Purchase[];
   sales: Sale[];
+  dividends: Dividend[];
 }> {
   await ensureRequiredSheets(accessToken, spreadsheetId);
 
-  const ranges = ['Industry!A1:Z', 'Stocks!A1:Z', 'Purchases!A1:Z', 'Sales!A1:Z'];
+  const ranges = ['Industry!A1:Z', 'Stocks!A1:Z', 'Purchases!A1:Z', 'Sales!A1:Z', 'Dividends!A1:Z'];
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?` +
     ranges.map(r => `ranges=${encodeURIComponent(r)}`).join('&');
 
@@ -275,12 +341,14 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
   const rawStocks = parseTable(1);
   const rawPurchases = parseTable(2);
   const rawSales = parseTable(3);
+  const rawDividends = parseTable(4);
 
   // Parse Industries
   const parsedIndustries: Industry[] = rawIndustries.length > 0 
     ? rawIndustries.map((ind: any, idx: number) => ({
         IndustryId: (ind.IndustryId || `IND${String(idx + 1).padStart(4, '0')}`).trim(),
         Name: ind.Name || 'General',
+        Suggested: parseNumericValue(getNormalizedField(ind, ['Suggested', 'SuggestedPercentage', 'SuggestedPercent'])) ?? 0,
       }))
     : DEFAULT_INDUSTRIES;
 
@@ -316,6 +384,11 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
     const fallbackPrice = parseNumericValue(s.CurrentPrice) ?? 0;
     const finalPrice = rawLive > 0 ? rawLive : fallbackPrice;
 
+    const rawCapitalization = String(getNormalizedField(s, ['Capitalization']) || '').trim();
+    const capitalization = STOCK_CAPITALIZATIONS.find(
+      value => value.toLowerCase() === rawCapitalization.toLowerCase()
+    ) || '';
+
     return {
       StockId: rawStockId,
       Symbol: symbol,
@@ -336,6 +409,8 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
       Pe: parseNumericValue(s.pe) ?? parseNumericValue(s.Pe) ?? parseNumericValue(s.PE),
       Currency: s.Currency || 'INR',
       DividendYield: parseFloat(s.DividendYield) || 0,
+      SuggestedInvestment: parseNumericValue(getNormalizedField(s, ['SuggestedInvestment'])) ?? 0,
+      Capitalization: capitalization,
       LastUpdated: formatDateOnly(s.LastUpdated),
     };
   });
@@ -363,16 +438,25 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
   const stocks: Stock[] = Array.from(stockMapById.values());
 
   // Parse Purchases
-  const parsedPurchases: Purchase[] = rawPurchases.map((p: any, idx: number) => ({
-    PurchaseId: (p.PurchaseId || `Pur${String(idx + 1).padStart(8, '0')}`).toString().trim(),
-    StockId: (p.StockId || '').toString().trim(),
-    PurchaseDate: formatDateOnly(p.PurchaseDate),
-    Quantity: parseFloat(p.Quantity) || 0,
-    PurchasePrice: parseFloat(p.PurchasePrice) || 0,
-    TotalAmount: parseFloat(p.TotalAmount) || (parseFloat(p.Quantity) * parseFloat(p.PurchasePrice)) || 0,
-    Fees: parseFloat(p.Fees) || 0,
-    Notes: p.Notes || '',
-  }));
+  const parsedPurchases: Purchase[] = rawPurchases.map((p: any, idx: number) => {
+    const quantity = parseNumericValue(getNormalizedField(p, ['Quantity', 'Qty', 'Shares', 'PurchasedQuantity'])) ?? 0;
+    const purchasePrice = parseNumericValue(
+      getNormalizedField(p, ['PurchasePrice', 'Purchase Rate', 'BuyPrice', 'Buy Price', 'Price', 'Rate'])
+    ) ?? 0;
+    const totalAmount = parseNumericValue(getNormalizedField(p, ['TotalAmount', 'Total Cost', 'Amount']))
+      ?? quantity * purchasePrice;
+
+    return {
+      PurchaseId: (getNormalizedField(p, ['PurchaseId', 'PurchasesId', 'Id']) || `Pur${String(idx + 1).padStart(8, '0')}`).toString().trim(),
+      StockId: (getNormalizedField(p, ['StockId', 'StocksId']) || '').toString().trim(),
+      PurchaseDate: formatDateOnly(getNormalizedField(p, ['PurchaseDate', 'Date'])),
+      Quantity: quantity,
+      PurchasePrice: purchasePrice,
+      TotalAmount: totalAmount,
+      Fees: parseNumericValue(getNormalizedField(p, ['Fees', 'Fee', 'Brokerage'])) ?? 0,
+      Notes: getNormalizedField(p, ['Notes', 'Note', 'Remarks']) || '',
+    };
+  });
 
   // Deduplicate purchases by PurchaseId (Primary Key)
   const purchaseMapById = new Map<string, Purchase>();
@@ -388,23 +472,28 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
 
   // Parse Sales
   const parsedSales: Sale[] = rawSales.map((s: any, idx: number) => {
-    const rawId = (s.SaleId || s.SalesId || s.saleid || s.salesid || s['Sale Id'] || s['Sales Id'] || s.Id || s.ID || '').toString().trim();
+    const rawId = (getNormalizedField(s, ['SaleId', 'SalesId', 'Id']) || '').toString().trim();
     const saleId = rawId || `Sal${String(idx + 1).padStart(8, '0')}`;
-    const rawPurchaseId = (s.PurchaseId || s.PurchasesId || s.purchaseid || s.purchasesid || s['Purchase Id'] || '').toString().trim();
-    const rawStockId = (s.StockId || s.stockid || s['Stock Id'] || '').toString().trim();
-    const saleRate = parseFloat(s.Rate ?? s.rate ?? s.SalePrice ?? s.saleprice ?? s.SalesPrice ?? s.salesprice ?? s['Sale Price'] ?? s['Rate'] ?? 0) || 0;
+    const rawPurchaseId = (getNormalizedField(s, ['PurchaseId', 'PurchasesId']) || '').toString().trim();
+    const rawStockId = (getNormalizedField(s, ['StockId', 'StocksId']) || '').toString().trim();
+    const quantity = parseNumericValue(getNormalizedField(s, ['Quantity', 'Qty', 'Shares', 'SoldQuantity'])) ?? 0;
+    const saleRate = parseNumericValue(
+      getNormalizedField(s, ['Rate', 'SalePrice', 'SalesPrice', 'SellPrice', 'SellRate', 'Price'])
+    ) ?? 0;
+    const totalAmount = parseNumericValue(getNormalizedField(s, ['TotalAmount', 'Total Proceeds', 'Amount']))
+      ?? quantity * saleRate;
     return {
       SaleId: saleId,
       SalesId: saleId,
       PurchaseId: rawPurchaseId,
       StockId: rawStockId,
-      SaleDate: formatDateOnly(s.SaleDate || s.salesdate || s.Date),
-      Quantity: parseFloat(s.Quantity || s.qty || s.shares) || 0,
+      SaleDate: formatDateOnly(getNormalizedField(s, ['SaleDate', 'SalesDate', 'Date'])),
+      Quantity: quantity,
       SalePrice: saleRate,
       Rate: saleRate,
-      TotalAmount: parseFloat(s.TotalAmount || s.total || s.amount) || (parseFloat(s.Quantity) * saleRate) || 0,
-      Fees: parseFloat(s.Fees || s.fees || s.fee) || 0,
-      Notes: s.Notes || s.notes || '',
+      TotalAmount: totalAmount,
+      Fees: parseNumericValue(getNormalizedField(s, ['Fees', 'Fee', 'Brokerage'])) ?? 0,
+      Notes: getNormalizedField(s, ['Notes', 'Note', 'Remarks']) || '',
     };
   });
 
@@ -420,7 +509,188 @@ export async function loadAllTables(accessToken: string, spreadsheetId: string):
     (a: Sale, b: Sale) => new Date(b.SaleDate).getTime() - new Date(a.SaleDate).getTime()
   );
 
-  return { industries, stocks, purchases, sales };
+  const dividends: Dividend[] = rawDividends.map((record: any, idx: number) => ({
+    DividendId: String(getNormalizedField(record, ['DividendId', 'Id']) || `DIV${String(idx + 1).padStart(8, '0')}`).trim(),
+    StockId: String(getNormalizedField(record, ['StockId', 'StocksId']) || '').trim(),
+    Date: parseDividendDate(getNormalizedField(record, ['Date', 'DividendDate'])),
+    Quantity: parseNumericValue(getNormalizedField(record, ['Quantity', 'Qty', 'Shares'])) ?? 0,
+    PerStock: parseNumericValue(getNormalizedField(record, ['PerStock', 'DividendPerShare', 'PerShare'])) ?? 0,
+    TotalDividend: parseNumericValue(getNormalizedField(record, ['TotalDividend', 'TotalAmount', 'Amount'])) ?? 0,
+  }));
+
+  return { industries, stocks, purchases, sales, dividends };
+}
+
+function parseDividendDate(value: unknown): string {
+  const dateValue = String(value ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return dateValue;
+
+  const numericDate = dateValue.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (numericDate) {
+    const first = Number(numericDate[1]);
+    const second = Number(numericDate[2]);
+    const year = Number(numericDate[3]);
+    // The supplied dividend CSV uses MM-DD-YYYY; infer DD-MM only when the first part cannot be a month.
+    const month = first > 12 ? second : first;
+    const day = first > 12 ? first : second;
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+
+  const parsedDate = new Date(dateValue);
+  return Number.isNaN(parsedDate.getTime()) ? '' : parsedDate.toISOString().slice(0, 10);
+}
+
+function parseCsvRows(csvText: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let insideQuotes = false;
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const character = csvText[index];
+    if (character === '"') {
+      if (insideQuotes && csvText[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (character === ',' && !insideQuotes) {
+      row.push(field.trim());
+      field = '';
+    } else if ((character === '\n' || character === '\r') && !insideQuotes) {
+      if (character === '\r' && csvText[index + 1] === '\n') index += 1;
+      row.push(field.trim());
+      if (row.some(value => value.length > 0)) rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += character;
+    }
+  }
+
+  row.push(field.trim());
+  if (row.some(value => value.length > 0)) rows.push(row);
+  return rows;
+}
+
+export interface DividendCsvImportResult {
+  imported: Dividend[];
+  skipped: number;
+  unmatchedStockIds: string[];
+  invalidRows: number;
+  duplicates: number;
+}
+
+export async function importDividendsCsv(
+  accessToken: string,
+  spreadsheetId: string,
+  csvText: string,
+  stocks: Stock[],
+  existingDividends: Dividend[]
+): Promise<DividendCsvImportResult> {
+  await ensureRequiredSheets(accessToken, spreadsheetId);
+  const rows = parseCsvRows(csvText);
+  if (rows.length < 2) throw new Error('The selected CSV contains no dividend rows.');
+
+  const headers = rows[0].map(header => header.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const column = (name: string) => headers.indexOf(name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const stockColumn = column('StockId');
+  const dateColumn = column('Date');
+  const quantityColumn = column('Quantity');
+  const perStockColumn = column('PerStock');
+  const totalColumn = column('TotalDividend');
+  if ([stockColumn, dateColumn, quantityColumn, perStockColumn, totalColumn].some(index => index < 0)) {
+    throw new Error('CSV must contain StockId, Date, Quantity, PerStock, and TotalDividend columns.');
+  }
+
+  const normalizeStockKey = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const stockLookup = new Map<string, Stock>();
+  stocks.forEach(stock => {
+    [stock.StockId, stock.Symbol, stock.MktSymbol].forEach(alias => {
+      const key = normalizeStockKey(alias);
+      if (key) stockLookup.set(key, stock);
+    });
+  });
+
+  const dividendKey = (dividend: Pick<Dividend, 'StockId' | 'Date' | 'Quantity' | 'PerStock' | 'TotalDividend'>) =>
+    `${dividend.StockId.toUpperCase()}|${dividend.Date}|${dividend.Quantity}|${dividend.PerStock}|${dividend.TotalDividend}`;
+  const existingKeys = new Set(existingDividends.map(dividendKey));
+  const unmatchedStockIds = new Set<string>();
+  const imported: Dividend[] = [];
+  let invalidRows = 0;
+  let duplicates = 0;
+
+  rows.slice(1).forEach((values, index) => {
+    const sourceStockId = values[stockColumn] || '';
+    const stock = stockLookup.get(normalizeStockKey(sourceStockId));
+    const date = parseDividendDate(values[dateColumn]);
+    const quantity = parseNumericValue(values[quantityColumn]);
+    const perStock = parseNumericValue(values[perStockColumn]);
+    const totalDividend = parseNumericValue(values[totalColumn]);
+    if (!stock) {
+      unmatchedStockIds.add(sourceStockId || `(row ${index + 2})`);
+      return;
+    }
+    if (!date || quantity === undefined || quantity <= 0 || perStock === undefined || totalDividend === undefined) {
+      invalidRows += 1;
+      return;
+    }
+
+    const dividend: Dividend = {
+      DividendId: `DIV${Date.now()}${String(index + 1).padStart(4, '0')}`,
+      StockId: stock.StockId,
+      Date: date,
+      Quantity: quantity,
+      PerStock: perStock,
+      TotalDividend: totalDividend,
+    };
+    const key = dividendKey(dividend);
+    if (existingKeys.has(key)) {
+      duplicates += 1;
+      return;
+    }
+    existingKeys.add(key);
+    imported.push(dividend);
+  });
+
+  if (imported.length > 0) {
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Dividends!A:F:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          values: imported.map(dividend => [
+            dividend.DividendId,
+            dividend.StockId,
+            dividend.Date,
+            dividend.Quantity,
+            dividend.PerStock,
+            dividend.TotalDividend,
+          ]),
+        }),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(`Failed to import dividends: ${error?.error?.message || response.statusText}`);
+    }
+  }
+
+  return {
+    imported,
+    skipped: unmatchedStockIds.size + invalidRows + duplicates,
+    unmatchedStockIds: [...unmatchedStockIds],
+    invalidRows,
+    duplicates,
+  };
 }
 
 /**
@@ -592,7 +862,11 @@ export function aggregateStockHoldings(
       return sum + remainingQuantity * purchase.PurchasePrice;
     }, 0);
     const totalInvested = activeCostBasis;
-    const cumulativeInvested = stockPurchases.reduce((sum, purchase) => sum + purchase.TotalAmount, 0);
+    const cumulativeInvested = stockPurchases.reduce(
+      (sum, purchase) => sum + purchase.Quantity * purchase.PurchasePrice,
+      0
+    );
+    const totalSales = stockSales.reduce((sum, sale) => sum + sale.Quantity * sale.SalePrice, 0);
     const averagePurchasePrice = totalQuantity > 0 ? activeCostBasis / totalQuantity : 0;
 
     const livePrice = stock.Liverate;
@@ -622,6 +896,7 @@ export function aggregateStockHoldings(
       totalSoldQuantity,
       totalInvested,
       cumulativeInvested,
+      totalSales,
       activeCostBasis,
       averagePurchasePrice,
       currentHoldingValue,
@@ -1185,6 +1460,7 @@ export async function analyzeSheetStockFormulas(
       lastFilledRow: 1,
     };
   }
+
 }
 
 /**
@@ -1303,6 +1579,10 @@ export async function addNewStockWithFormulas(
           return newStock.Currency || 'INR';
         case 'dividendyield':
           return newStock.DividendYield ?? 0;
+        case 'suggestedinvestment':
+          return newStock.SuggestedInvestment ?? 0;
+        case 'capitalization':
+          return newStock.Capitalization || '';
         case 'lastupdated':
           return formatDateOnly(newStock.LastUpdated);
         default:
@@ -1406,6 +1686,8 @@ export async function updateExistingStock(
   if (colIndices['induistryid'] !== undefined) currentRow[colIndices['induistryid']] = updatedStock.IndustryId;
   if (colIndices['exchange'] !== undefined) currentRow[colIndices['exchange']] = updatedStock.Exchange;
   if (colIndices['dividendyield'] !== undefined) currentRow[colIndices['dividendyield']] = updatedStock.DividendYield;
+    if (colIndices['suggestedinvestment'] !== undefined) currentRow[colIndices['suggestedinvestment']] = updatedStock.SuggestedInvestment;
+    if (colIndices['capitalization'] !== undefined) currentRow[colIndices['capitalization']] = updatedStock.Capitalization;
   if (colIndices['lastupdated'] !== undefined) currentRow[colIndices['lastupdated']] = getTodayDateOnly();
 
   // Ensure formulas in this row point to sheetRowNum (fixing any C101 or mismatched row numbers)

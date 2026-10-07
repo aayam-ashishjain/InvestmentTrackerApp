@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Database, 
   ShoppingCart, 
@@ -11,6 +11,7 @@ import {
   ExternalLink, 
   Activity, 
   Layers, 
+  BarChart3,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
@@ -26,12 +27,14 @@ import {
   Receipt,
   X,
   CheckCircle2,
-  Calendar
+  Calendar,
+  Upload,
 } from 'lucide-react';
 import { 
   Stock, 
   Purchase, 
   Sale,
+  Dividend,
   Industry,
   EnrichedPurchase, 
   EnrichedSale,
@@ -47,6 +50,13 @@ import { AddSaleModal } from './AddSaleModal';
 import { EditSaleModal } from './EditSaleModal';
 import { EditPurchaseModal } from './EditPurchaseModal';
 import { PortfolioSummary } from './PortfolioSummary';
+import { FinancialYearTree } from './FinancialYearTree';
+import { CsvExportButton } from './CsvExportButton';
+import type { DividendCsvImportResult } from '../services/sheetsDatabase';
+
+const PortfolioInfographics = React.lazy(() =>
+  import('./PortfolioInfographics').then(module => ({ default: module.PortfolioInfographics }))
+);
 
 interface PortfolioDashboardProps {
   spreadsheetId: string;
@@ -55,6 +65,7 @@ interface PortfolioDashboardProps {
   stocks: Stock[];
   purchases: Purchase[];
   sales: Sale[];
+  dividends: Dividend[];
   enrichedStocks: EnrichedStock[];
   enrichedPurchases: EnrichedPurchase[];
   enrichedSales: EnrichedSale[];
@@ -67,6 +78,7 @@ interface PortfolioDashboardProps {
   onSimulatePriceTick: () => void;
   onAddStock: (stock: Stock) => Promise<void>;
   onUpdateStock: (stock: Stock) => Promise<void>;
+  onImportDividends: (csvText: string) => Promise<DividendCsvImportResult>;
 }
 
 type StockSortKey =
@@ -74,8 +86,12 @@ type StockSortKey =
   | 'Symbol'
   | 'CompanyName'
   | 'industryName'
+  | 'Capitalization'
   | 'Liverate'
+  | 'SuggestedInvestment'
   | 'totalQuantity'
+  | 'cumulativeInvested'
+  | 'totalSales'
   | 'averagePurchasePrice'
   | 'totalInvested'
   | 'currentHoldingValue'
@@ -93,6 +109,60 @@ function getStockSortValue(stock: EnrichedStock, key: StockSortKey): string | nu
   }
 }
 
+interface DashboardHorizontalScrollBarProps {
+  targetRef: React.RefObject<HTMLDivElement | null>;
+}
+
+const DashboardHorizontalScrollBar: React.FC<DashboardHorizontalScrollBarProps> = ({ targetRef }) => {
+  const railRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ contentWidth: 0, viewportWidth: 0 });
+
+  useEffect(() => {
+    const target = targetRef.current;
+    const rail = railRef.current;
+    if (!target || !rail) return;
+
+    const updateDimensions = () => {
+      setDimensions({ contentWidth: target.scrollWidth, viewportWidth: target.clientWidth });
+    };
+    const syncRailFromTarget = () => {
+      if (Math.abs(rail.scrollLeft - target.scrollLeft) > 1) rail.scrollLeft = target.scrollLeft;
+    };
+    const syncTargetFromRail = () => {
+      if (Math.abs(target.scrollLeft - rail.scrollLeft) > 1) target.scrollLeft = rail.scrollLeft;
+    };
+
+    const observer = new ResizeObserver(updateDimensions);
+    observer.observe(target);
+    if (target.firstElementChild) observer.observe(target.firstElementChild);
+    target.addEventListener('scroll', syncRailFromTarget, { passive: true });
+    rail.addEventListener('scroll', syncTargetFromRail, { passive: true });
+    window.addEventListener('resize', updateDimensions);
+    updateDimensions();
+
+    return () => {
+      observer.disconnect();
+      target.removeEventListener('scroll', syncRailFromTarget);
+      rail.removeEventListener('scroll', syncTargetFromRail);
+      window.removeEventListener('resize', updateDimensions);
+    };
+  }, [targetRef]);
+
+  if (dimensions.contentWidth <= dimensions.viewportWidth + 1) return null;
+
+  return (
+    <div
+      ref={railRef}
+      className="dashboard-horizontal-rail sticky bottom-0 z-20 overflow-x-auto overflow-y-hidden"
+      role="region"
+      aria-label="Horizontal table scroll"
+      tabIndex={0}
+    >
+      <div style={{ width: dimensions.contentWidth, minWidth: '100%', height: 1 }} />
+    </div>
+  );
+};
+
 export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   spreadsheetId,
   spreadsheetName,
@@ -100,6 +170,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   stocks,
   purchases,
   sales,
+  dividends,
   enrichedStocks,
   enrichedPurchases,
   enrichedSales,
@@ -112,10 +183,17 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
   onSimulatePriceTick,
   onAddStock,
   onUpdateStock,
+  onImportDividends,
 }) => {
-  const [activeTab, setActiveTab] = useState<'stocks' | 'purchases' | 'sales' | 'schema'>('stocks');
+  const [activeTab, setActiveTab] = useState<'stocks' | 'purchases' | 'sales' | 'dividends' | 'schema' | 'infographics'>('stocks');
   const [selectedStockFilter, setSelectedStockFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const stocksTableScrollRef = useRef<HTMLDivElement>(null);
+  const purchasesTableScrollRef = useRef<HTMLDivElement>(null);
+  const salesTableScrollRef = useRef<HTMLDivElement>(null);
+  const dividendFileInputRef = useRef<HTMLInputElement>(null);
+  const [isImportingDividends, setIsImportingDividends] = useState(false);
+  const [dividendImportMessage, setDividendImportMessage] = useState<string | null>(null);
   const [stockSort, setStockSort] = useState<{
     key: StockSortKey;
     direction: 'asc' | 'desc';
@@ -260,6 +338,62 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
     return matchesFilter && matchesSearch;
   });
 
+  const sortedDividends = [...dividends].sort((left, right) => right.Date.localeCompare(left.Date));
+  const dividendGroups = new Map<number, {
+    financialYear: string;
+    total: number;
+    months: Map<string, { label: string; total: number; records: Dividend[] }>;
+  }>();
+  sortedDividends.forEach(dividend => {
+    const [yearValue, monthValue] = dividend.Date.split('-').map(Number);
+    if (!yearValue || !monthValue || monthValue < 1 || monthValue > 12) return;
+    const financialYearStart = monthValue >= 4 ? yearValue : yearValue - 1;
+    const financialYear = `FY ${financialYearStart}-${String(financialYearStart + 1).slice(-2)}`;
+    let yearGroup = dividendGroups.get(financialYearStart);
+    if (!yearGroup) {
+      yearGroup = { financialYear, total: 0, months: new Map() };
+      dividendGroups.set(financialYearStart, yearGroup);
+    }
+
+    const monthKey = String(monthValue).padStart(2, '0');
+    let monthGroup = yearGroup.months.get(monthKey);
+    if (!monthGroup) {
+      const monthDate = new Date(Date.UTC(yearValue, monthValue - 1, 1));
+      monthGroup = {
+        label: monthDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
+        total: 0,
+        records: [],
+      };
+      yearGroup.months.set(monthKey, monthGroup);
+    }
+    yearGroup.total += dividend.TotalDividend;
+    monthGroup.total += dividend.TotalDividend;
+    monthGroup.records.push(dividend);
+  });
+  const financialYearGroups = [...dividendGroups.entries()].sort((left, right) => right[0] - left[0]);
+  const totalDividendIncome = sortedDividends.reduce((sum, dividend) => sum + dividend.TotalDividend, 0);
+
+  const handleDividendFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setIsImportingDividends(true);
+    setDividendImportMessage(null);
+    try {
+      const result = await onImportDividends(await file.text());
+      const unmatched = result.unmatchedStockIds.length > 0
+        ? ` Unmatched tickers: ${result.unmatchedStockIds.join(', ')}.`
+        : '';
+      setDividendImportMessage(
+        `Imported ${result.imported.length}; skipped ${result.duplicates} duplicates and ${result.invalidRows} invalid rows.${unmatched}`
+      );
+    } catch (error) {
+      setDividendImportMessage(error instanceof Error ? error.message : 'Dividend CSV import failed.');
+    } finally {
+      setIsImportingDividends(false);
+      event.target.value = '';
+    }
+  };
+
   // Overall Portfolio Aggregates in INR
   const totalInvested = enrichedStocks.reduce((sum, s) => sum + s.activeCostBasis, 0);
   const totalCurrentValue = enrichedStocks.reduce((sum, s) => sum + s.currentHoldingValue, 0);
@@ -335,6 +469,8 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
         CurrentPrice: initialPrice,
         Currency: 'INR',
         DividendYield: parseFloat(newStockData.dividendYield) || 0,
+        SuggestedInvestment: 0,
+        Capitalization: 'Small cap',
         LastUpdated: getTodayDateOnly(),
       };
 
@@ -477,6 +613,17 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
             <span>Sales ({sales.length})</span>
           </button>
           <button
+            onClick={() => setActiveTab('dividends')}
+            className={`px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+              activeTab === 'dividends'
+                ? 'bg-slate-800 text-emerald-300 shadow'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Receipt className="w-3.5 h-3.5" />
+            <span>Dividends ({dividends.length})</span>
+          </button>
+          <button
             onClick={() => setActiveTab('schema')}
             className={`px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               activeTab === 'schema'
@@ -486,6 +633,17 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
           >
             <Layers className="w-3.5 h-3.5" />
             <span>Sectors ({industries.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('infographics')}
+            className={`px-3.5 py-2 rounded-lg transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+              activeTab === 'infographics'
+                ? 'bg-slate-800 text-cyan-400 shadow'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Infographics</span>
           </button>
         </div>
 
@@ -536,8 +694,28 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
               <h3 className="text-sm sm:text-base font-bold text-white">
                 Stocks
               </h3>
-              <div className="text-xs text-slate-400">
-                {filteredStocks.length} {filteredStocks.length === 1 ? 'stock' : 'stocks'}
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-400">{filteredStocks.length} {filteredStocks.length === 1 ? 'stock' : 'stocks'}</span>
+                <CsvExportButton
+                  fileName="stocks"
+                  records={sortedStocks}
+                  columns={[
+                    { header: 'Stock ID', value: stock => stock.StockId },
+                    { header: 'Symbol', value: stock => stock.Symbol },
+                    { header: 'Company Name', value: stock => stock.CompanyName },
+                    { header: 'Industry', value: stock => stock.industryName },
+                    { header: 'Capitalization', value: stock => stock.Capitalization },
+                    { header: 'Price', value: stock => stock.Liverate },
+                    { header: 'Quantity', value: stock => stock.totalQuantity },
+                    { header: 'Market Value', value: stock => stock.currentHoldingValue },
+                    { header: 'Suggested Investment', value: stock => stock.SuggestedInvestment },
+                    { header: 'Total Invested', value: stock => stock.cumulativeInvested },
+                    { header: 'Total Sales', value: stock => stock.totalSales },
+                    { header: 'Average Cost', value: stock => stock.averagePurchasePrice },
+                    { header: 'Open Invested', value: stock => stock.totalInvested },
+                    { header: 'Unrealized P&L', value: stock => stock.unrealizedGainLoss },
+                  ]}
+                />
               </div>
             </div>
 
@@ -588,8 +766,8 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                           </div>
                         </div>
 
-                        {hasPurchases && (
-                          <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-center text-xs">
+                                        {hasPurchases && (
+                                          <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-center text-xs">
                             <div>
                               <span className="text-[10px] text-slate-400 block uppercase">Quantity</span>
                               <span className="font-mono font-semibold text-white">{stock.totalQuantity.toLocaleString()}</span>
@@ -606,6 +784,17 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                             </div>
                           </div>
                         )}
+
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-500 block uppercase">Suggested</span>
+                            <span className="font-mono font-semibold text-cyan-300">{formatINR(stock.SuggestedInvestment)}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-500 block uppercase">Capitalization</span>
+                            <span className="font-semibold text-slate-200">{stock.Capitalization || 'Unclassified'}</span>
+                          </div>
+                        </div>
 
                         <div className="flex items-center justify-between pt-1">
                           <span className="text-[11px] text-slate-500 font-mono">
@@ -625,7 +814,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                 </div>
 
                 {/* Desktop & Tablet Table (>= md screens) */}
-                <div className="hidden md:block overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div ref={stocksTableScrollRef} className="hidden md:block overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
                   <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-slate-950/60 text-slate-400 font-semibold border-b border-slate-800 uppercase tracking-wider">
                     <tr>
@@ -633,11 +822,15 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                       {sortableHeader('Symbol', 'Symbol')}
                       {sortableHeader('Company Name', 'CompanyName')}
                       {sortableHeader('Industry', 'industryName')}
+                      {sortableHeader('Capitalization', 'Capitalization')}
                       {sortableHeader('Price (₹)', 'Liverate', true)}
                       {sortableHeader('Quantity', 'totalQuantity', true)}
                       {sortableHeader('Market Value (₹)', 'currentHoldingValue', true)}
+                      {sortableHeader('Suggested Investment (₹)', 'SuggestedInvestment', true)}
+                      {sortableHeader('Total Invested (₹)', 'cumulativeInvested', true)}
+                      {sortableHeader('Total Sales (₹)', 'totalSales', true)}
                       {sortableHeader('Avg Cost (₹)', 'averagePurchasePrice', true)}
-                      {sortableHeader('Invested (₹)', 'totalInvested', true)}
+                      {sortableHeader('Open Invested (₹)', 'totalInvested', true)}
                       {sortableHeader('Profit / Loss', 'unrealizedGainLoss', true)}
                       <th className="py-3 px-4 text-center">Action</th>
                     </tr>
@@ -687,6 +880,9 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                               {stock.IndustryId}
                             </div>
                           </td>
+                          <td className="py-3 px-4 text-xs font-semibold text-slate-200">
+                            {stock.Capitalization || 'Unclassified'}
+                          </td>
 
                           <td className="py-3 px-4 text-right font-mono font-bold text-emerald-400 text-sm">
                             <div className="flex items-center justify-end gap-1.5">
@@ -699,6 +895,15 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-white font-bold text-sm">
                             {hasPurchases ? formatINR(stock.currentHoldingValue) : '₹0.00'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-cyan-300 font-semibold">
+                            {formatINR(stock.SuggestedInvestment)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-200 font-semibold">
+                            {hasPurchaseHistory ? formatINR(stock.cumulativeInvested) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-amber-300 font-semibold">
+                            {stock.saleCount > 0 ? formatINR(stock.totalSales) : '—'}
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-slate-300">
                             {hasPurchaseHistory ? formatINR(stock.averagePurchasePrice) : '—'}
@@ -763,7 +968,65 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
             ) : (
               <>
                 {/* Mobile Card List (< md screens) */}
-                <div className="md:hidden divide-y divide-slate-800">
+                <div className="p-3 sm:p-4">
+                  <FinancialYearTree
+                    records={filteredPurchases}
+                    getKey={purchase => purchase.PurchaseId}
+                    getDate={purchase => purchase.PurchaseDate}
+                    getAmount={purchase => purchase.TotalAmount || purchase.Quantity * purchase.PurchasePrice}
+                    totalLabel="Total purchases"
+                    emptyMessage="No purchase records in a valid date range."
+                    exportFileName="purchases"
+                    exportColumns={[
+                      { header: 'Purchase ID', value: purchase => purchase.PurchaseId },
+                      { header: 'Stock ID', value: purchase => purchase.StockId },
+                      { header: 'Symbol', value: purchase => purchase.symbol },
+                      { header: 'Date', value: purchase => purchase.PurchaseDate },
+                      { header: 'Quantity', value: purchase => purchase.Quantity },
+                      { header: 'Sold Quantity', value: purchase => purchase.soldQuantity },
+                      { header: 'Remaining Quantity', value: purchase => purchase.remainingQuantity },
+                      { header: 'Purchase Price', value: purchase => purchase.PurchasePrice },
+                      { header: 'Total Amount', value: purchase => purchase.TotalAmount },
+                      { header: 'Current Value', value: purchase => purchase.currentValue },
+                      { header: 'Unrealized P&L', value: purchase => purchase.gainLoss },
+                    ]}
+                    renderRecord={purchase => {
+                      const hasAvailable = purchase.remainingQuantity > 0;
+                      const isProfit = purchase.gainLoss >= 0;
+                      return (
+                        <div className="grid grid-cols-2 items-center gap-x-3 gap-y-2 px-3 py-3 sm:grid-cols-[minmax(105px,0.8fr)_minmax(130px,1.2fr)_repeat(4,minmax(90px,0.8fr))_auto] sm:px-4">
+                          <button
+                            type="button"
+                            onClick={() => { setEditingPurchase(purchase); setIsEditPurchaseOpen(true); }}
+                            className="text-left font-mono text-xs font-bold text-amber-400 hover:underline"
+                            title={`Edit purchase ${purchase.PurchaseId}`}
+                          >
+                            {purchase.PurchaseId}
+                          </button>
+                          <span className="min-w-0 truncate text-xs font-semibold text-white" title={`${purchase.symbol} (${purchase.StockId})`}>
+                            {purchase.symbol} <span className="font-mono font-normal text-slate-500">{purchase.StockId}</span>
+                          </span>
+                          <span className="text-right font-mono text-[11px] text-slate-300">{purchase.remainingQuantity}/{purchase.Quantity} held</span>
+                          <span className="text-right font-mono text-[11px] text-slate-300">Buy {formatINR(purchase.PurchasePrice)}</span>
+                          <span className="text-right font-mono text-[11px] text-slate-200">Cost {formatINR(purchase.TotalAmount)}</span>
+                          <span className={`text-right font-mono text-[11px] ${isProfit ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            P&L {formatINR(purchase.gainLoss)}
+                          </span>
+                          {hasAvailable ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaleForPurchase(purchase.PurchaseId)}
+                              className="col-span-2 justify-self-end rounded-lg bg-amber-400 px-2.5 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-amber-300 sm:col-span-1"
+                            >
+                              Sell lot
+                            </button>
+                          ) : <span className="col-span-2 justify-self-end text-[10px] text-slate-500 sm:col-span-1">Fully sold</span>}
+                        </div>
+                      );
+                    }}
+                  />
+                </div>
+                <div className="hidden md:hidden divide-y divide-slate-800">
                   {filteredPurchases.map((p, idx) => {
                     const isProfit = p.gainLoss >= 0;
                     const hasAvailable = p.remainingQuantity > 0;
@@ -849,7 +1112,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                 </div>
 
                 {/* Desktop & Tablet Table (>= md screens) */}
-                <div className="hidden md:block overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div ref={purchasesTableScrollRef} className="hidden md:hidden overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
                   <table className="w-full text-left text-xs whitespace-nowrap">
                     <thead className="bg-slate-950/60 text-slate-400 font-semibold border-b border-slate-800 uppercase tracking-wider">
                       <tr>
@@ -972,8 +1235,25 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
               <h3 className="text-sm sm:text-base font-bold text-white">
                 Sales
               </h3>
-              <div className="text-xs text-slate-400">
-                {filteredSales.length} {filteredSales.length === 1 ? 'record' : 'records'}
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-400">{filteredSales.length} {filteredSales.length === 1 ? 'record' : 'records'}</span>
+                <CsvExportButton
+                  fileName="sales"
+                  records={filteredSales}
+                  columns={[
+                    { header: 'Sale ID', value: sale => sale.SaleId },
+                    { header: 'Purchase ID', value: sale => sale.PurchaseId },
+                    { header: 'Stock ID', value: sale => sale.StockId },
+                    { header: 'Symbol', value: sale => sale.symbol },
+                    { header: 'Date', value: sale => sale.SaleDate },
+                    { header: 'Quantity', value: sale => sale.Quantity },
+                    { header: 'Sale Price', value: sale => sale.SalePrice },
+                    { header: 'Gross Amount', value: sale => sale.grossAmount },
+                    { header: 'Net Proceeds', value: sale => sale.netAmount },
+                    { header: 'Realized P&L', value: sale => sale.realizedGainLoss },
+                    { header: 'Notes', value: sale => sale.Notes },
+                  ]}
+                />
               </div>
             </div>
 
@@ -996,8 +1276,64 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
               </div>
             ) : (
               <>
+                <div className="p-3 sm:p-4">
+                  <FinancialYearTree
+                    records={filteredSales}
+                    getKey={sale => sale.SaleId || sale.SalesId}
+                    getDate={sale => sale.SaleDate}
+                    getAmount={sale => sale.TotalAmount || sale.Quantity * sale.SalePrice}
+                    totalLabel="Total sales"
+                    emptyMessage="No sale records in a valid date range."
+                    exportFileName="sales"
+                    exportColumns={[
+                      { header: 'Sale ID', value: sale => sale.SaleId },
+                      { header: 'Purchase ID', value: sale => sale.PurchaseId },
+                      { header: 'Stock ID', value: sale => sale.StockId },
+                      { header: 'Symbol', value: sale => sale.symbol },
+                      { header: 'Date', value: sale => sale.SaleDate },
+                      { header: 'Quantity', value: sale => sale.Quantity },
+                      { header: 'Sale Price', value: sale => sale.SalePrice },
+                      { header: 'Gross Amount', value: sale => sale.grossAmount },
+                      { header: 'Net Proceeds', value: sale => sale.netAmount },
+                      { header: 'Realized P&L', value: sale => sale.realizedGainLoss },
+                      { header: 'Notes', value: sale => sale.Notes },
+                    ]}
+                    renderRecord={sale => {
+                      const activeSaleId = sale.SaleId || sale.SalesId;
+                      const isProfit = sale.realizedGainLoss >= 0;
+                      return (
+                        <div className="grid grid-cols-2 items-center gap-x-3 gap-y-2 px-3 py-3 sm:grid-cols-[minmax(105px,0.8fr)_minmax(130px,1.2fr)_repeat(4,minmax(90px,0.8fr))_auto] sm:px-4">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditSale(sale)}
+                            className="text-left font-mono text-xs font-bold text-amber-400 hover:underline"
+                            title={`Edit sale ${activeSaleId}`}
+                          >
+                            {activeSaleId}
+                          </button>
+                          <span className="min-w-0 truncate text-xs font-semibold text-white" title={`${sale.symbol} (${sale.StockId})`}>
+                            {sale.symbol} <span className="font-mono font-normal text-slate-500">{sale.StockId}</span>
+                          </span>
+                          <span className="text-right font-mono text-[11px] text-slate-300">Lot {sale.PurchaseId}</span>
+                          <span className="text-right font-mono text-[11px] text-slate-300">{sale.Quantity} × {formatINR(sale.SalePrice)}</span>
+                          <span className="text-right font-mono text-[11px] text-slate-200">Gross {formatINR(sale.grossAmount)}</span>
+                          <span className={`text-right font-mono text-[11px] ${isProfit ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            P&L {formatINR(sale.realizedGainLoss)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditSale(sale)}
+                            className="col-span-2 justify-self-end rounded-lg border border-amber-800/60 bg-amber-950/60 px-2.5 py-1.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-900/60 sm:col-span-1"
+                          >
+                            Edit sale
+                          </button>
+                        </div>
+                      );
+                    }}
+                  />
+                </div>
                 {/* Mobile Card List (< md screens) */}
-                <div className="md:hidden divide-y divide-slate-800">
+                <div className="hidden md:hidden divide-y divide-slate-800">
                   {filteredSales.map((s, idx) => {
                     const isProfit = s.realizedGainLoss >= 0;
                     const activeId = s.SalesId || s.SaleId;
@@ -1058,7 +1394,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                 </div>
 
                 {/* Desktop & Tablet Table (>= md screens) */}
-                <div className="hidden md:block overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div ref={salesTableScrollRef} className="hidden md:hidden overflow-x-auto -mx-3 sm:mx-0 px-3 sm:px-0">
                   <table className="w-full text-left text-xs whitespace-nowrap">
                     <thead className="bg-slate-950/60 text-slate-400 font-semibold border-b border-slate-800 uppercase tracking-wider">
                       <tr>
@@ -1169,6 +1505,106 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
           </div>
         )}
 
+        {activeTab === 'dividends' && (
+          <div>
+            <div className="p-3.5 sm:p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-white">Dividends</h3>
+                <p className="text-xs text-slate-400 mt-1">Import dividend records from a CSV file. Dates are read as MM-DD-YYYY.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-400">{dividends.length} records</span>
+                <CsvExportButton
+                  fileName="dividends"
+                  records={sortedDividends}
+                  columns={[
+                    { header: 'Dividend ID', value: dividend => dividend.DividendId },
+                    { header: 'Stock ID', value: dividend => dividend.StockId },
+                    { header: 'Symbol', value: dividend => stocks.find(stock => stock.StockId.toUpperCase() === dividend.StockId.toUpperCase())?.Symbol || '' },
+                    { header: 'Date', value: dividend => dividend.Date },
+                    { header: 'Quantity', value: dividend => dividend.Quantity },
+                    { header: 'Per Share', value: dividend => dividend.PerStock },
+                    { header: 'Total Dividend', value: dividend => dividend.TotalDividend },
+                  ]}
+                />
+                <input
+                  ref={dividendFileInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={handleDividendFileChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => dividendFileInputRef.current?.click()}
+                  disabled={isImportingDividends}
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  {isImportingDividends ? 'Importing...' : 'Import CSV'}
+                </button>
+              </div>
+            </div>
+
+            {dividendImportMessage && (
+              <div className="border-b border-slate-800 bg-slate-950/70 px-4 py-3 text-xs text-cyan-200" role="status">
+                {dividendImportMessage}
+              </div>
+            )}
+
+            {sortedDividends.length === 0 ? (
+              <div className="p-12 text-center">
+                <Receipt className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <h4 className="text-sm font-semibold text-white">No dividend records</h4>
+                <p className="text-xs text-slate-400 mt-1">Import Dividends.csv to add dividend history to matching stocks.</p>
+              </div>
+            ) : (
+              <div className="space-y-3 p-3 sm:p-4">
+                <div className="flex items-center justify-between rounded-lg border border-emerald-900/70 bg-emerald-950/30 px-4 py-3">
+                  <span className="text-xs font-semibold uppercase text-emerald-200">All-time dividend total</span>
+                  <span className="font-mono text-sm font-bold text-emerald-300">{formatINR(totalDividendIncome)}</span>
+                </div>
+                <div className="space-y-2">
+                  {financialYearGroups.map(([yearStart, yearGroup]) => (
+                    <details key={yearStart} className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/40">
+                      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 hover:bg-slate-800/50">
+                        <span className="font-semibold text-white">{yearGroup.financialYear}</span>
+                        <span className="font-mono text-sm font-bold text-emerald-300">{formatINR(yearGroup.total)}</span>
+                      </summary>
+                      <div className="space-y-2 border-t border-slate-800 p-3 sm:p-4">
+                        {[...yearGroup.months.entries()].sort((left, right) => right[0].localeCompare(left[0])).map(([monthKey, monthGroup]) => (
+                          <details key={`${yearStart}-${monthKey}`} className="overflow-hidden rounded-lg border border-slate-800/80 bg-slate-900/60">
+                            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 hover:bg-slate-800/50">
+                              <span className="text-sm font-medium text-slate-200">{monthGroup.label}</span>
+                              <span className="font-mono text-xs font-semibold text-cyan-300">{formatINR(monthGroup.total)}</span>
+                            </summary>
+                            <div className="divide-y divide-slate-800/70 border-t border-slate-800/80">
+                              {monthGroup.records.map(dividend => {
+                                const stock = stocks.find(item => item.StockId.trim().toUpperCase() === dividend.StockId.trim().toUpperCase());
+                                return (
+                                  <div key={dividend.DividendId} className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[minmax(100px,1fr)_minmax(100px,1.5fr)_auto_auto_auto] sm:px-4">
+                                    <span className="text-xs text-slate-400">{dividend.Date}</span>
+                                    <span className="min-w-0 truncate text-xs font-semibold text-white" title={`${stock?.Symbol || 'Unknown stock'} (${dividend.StockId})`}>
+                                      {stock?.Symbol || 'Unknown stock'} <span className="font-mono font-normal text-slate-500">{dividend.StockId}</span>
+                                    </span>
+                                    <span className="text-right font-mono text-[11px] text-slate-400">{dividend.Quantity.toLocaleString()} shares</span>
+                                    <span className="text-right font-mono text-[11px] text-slate-300">{formatINR(dividend.PerStock)} / share</span>
+                                    <span className="col-span-2 text-right font-mono text-xs font-semibold text-emerald-300 sm:col-span-1">{formatINR(dividend.TotalDividend)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* TAB 4: SECTORS OVERVIEW */}
         {activeTab === 'schema' && (
           <div className="p-4 sm:p-6 space-y-4">
@@ -1179,8 +1615,20 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
                   Portfolio distribution across sectors
                 </p>
               </div>
-              <div className="text-xs font-mono text-slate-400">
-                {industries.length} sectors • {stocks.length} stocks
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-mono text-slate-400">{industries.length} sectors • {stocks.length} stocks</span>
+                <CsvExportButton
+                  fileName="industry-summary"
+                  records={industries}
+                  columns={[
+                    { header: 'Industry ID', value: industry => industry.IndustryId },
+                    { header: 'Industry', value: industry => industry.Name },
+                    { header: 'Suggested %', value: industry => industry.Suggested },
+                    { header: 'Stocks', value: industry => enrichedStocks.filter(stock => stock.IndustryId.toUpperCase() === industry.IndustryId.toUpperCase()).length },
+                    { header: 'Current Market Value', value: industry => enrichedStocks.filter(stock => stock.IndustryId.toUpperCase() === industry.IndustryId.toUpperCase()).reduce((sum, stock) => sum + stock.currentHoldingValue, 0) },
+                    { header: 'Open Invested', value: industry => enrichedStocks.filter(stock => stock.IndustryId.toUpperCase() === industry.IndustryId.toUpperCase()).reduce((sum, stock) => sum + stock.totalInvested, 0) },
+                  ]}
+                />
               </div>
             </div>
 
@@ -1238,6 +1686,23 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
             </div>
           </div>
         )}
+        {activeTab === 'infographics' && (
+          <React.Suspense fallback={<div className="p-6 text-xs text-slate-400">Loading portfolio charts...</div>}>
+            <PortfolioInfographics stocks={enrichedStocks} industries={industries} dividends={dividends} />
+          </React.Suspense>
+        )}
+        {(activeTab === 'stocks' || activeTab === 'purchases' || activeTab === 'sales') && (
+          <DashboardHorizontalScrollBar
+            key={activeTab}
+            targetRef={
+              activeTab === 'stocks'
+                ? stocksTableScrollRef
+                : activeTab === 'purchases'
+                  ? purchasesTableScrollRef
+                  : salesTableScrollRef
+            }
+          />
+        )}
       </div>
 
       {/* Purchase Modal Form (Fast Direct Save) */}
@@ -1289,6 +1754,7 @@ export const PortfolioDashboard: React.FC<PortfolioDashboardProps> = ({
         industries={industries}
         purchases={purchases}
         sales={sales}
+        dividends={dividends}
         stocks={stocks}
         onSave={onUpdateStock}
         onUpdatePurchase={onUpdatePurchase}

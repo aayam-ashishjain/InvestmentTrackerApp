@@ -13,13 +13,16 @@ import {
   updateSaleTransaction,
   updateStockPrices,
   saveStock,
+  importDividendsCsv,
   TRACKER_SPREADSHEET_NAME 
 } from './services/sheetsDatabase';
+import type { DividendCsvImportResult } from './services/sheetsDatabase';
 import { 
   Industry,
   Stock, 
   Purchase, 
   Sale,
+  Dividend,
   EnrichedPurchase, 
   EnrichedSale,
   EnrichedStock,
@@ -52,6 +55,7 @@ export default function App() {
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [dividends, setDividends] = useState<Dividend[]>([]);
 
   // Joined Relational Data
   const [enrichedStocks, setEnrichedStocks] = useState<EnrichedStock[]>([]);
@@ -117,6 +121,7 @@ export default function App() {
       setStocks(data.stocks);
       setPurchases(data.purchases);
       setSales(data.sales || []);
+      setDividends(data.dividends || []);
     } catch (err: any) {
       console.error('Data loading error:', err);
       showNotification(`Failed to load data: ${err.message}`, 'error');
@@ -153,6 +158,7 @@ export default function App() {
       setStocks([]);
       setPurchases([]);
       setSales([]);
+      setDividends([]);
     }
   };
 
@@ -308,6 +314,13 @@ export default function App() {
     }
   };
 
+  const handleImportDividends = async (csvText: string): Promise<DividendCsvImportResult> => {
+    if (!token || !spreadsheetId) throw new Error('Connect to the spreadsheet before importing dividends.');
+    const result = await importDividendsCsv(token, spreadsheetId, csvText, stocks, dividends);
+    setDividends(previous => [...result.imported, ...previous]);
+    return result;
+  };
+
   // If user is not logged in, show Auth Screen
   if (!user || !token) {
     return <AuthScreen onSignIn={handleSignIn} isLoading={isAuthLoading} error={authError} />;
@@ -403,6 +416,7 @@ export default function App() {
             stocks={stocks}
             purchases={purchases}
             sales={sales}
+            dividends={dividends}
             enrichedStocks={enrichedStocks}
             enrichedPurchases={enrichedPurchases}
             enrichedSales={enrichedSales}
@@ -415,6 +429,7 @@ export default function App() {
             onSimulatePriceTick={handleSimulatePriceTick}
             onAddStock={handleAddStock}
             onUpdateStock={handleUpdateStock}
+            onImportDividends={handleImportDividends}
           />
         ) : (
           <div className="text-center py-16">

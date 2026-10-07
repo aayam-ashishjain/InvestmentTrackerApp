@@ -13,15 +13,19 @@ import {
   Clock,
   Inbox,
   BarChart3,
+  Receipt,
   Lock,
   TrendingUp,
   Percent
 } from 'lucide-react';
 import { 
   Stock, 
+  StockCapitalization,
+  STOCK_CAPITALIZATIONS,
   Industry, 
   Purchase, 
   Sale, 
+  Dividend,
   EnrichedPurchase, 
   EnrichedSale, 
   deriveExchangeFromMktSymbol, 
@@ -31,6 +35,8 @@ import {
 } from '../types/database';
 import { EditPurchaseModal } from './EditPurchaseModal';
 import { EditSaleModal } from './EditSaleModal';
+import { FinancialYearTree } from './FinancialYearTree';
+import { CsvExportButton } from './CsvExportButton';
 
 interface EditStockModalProps {
   isOpen: boolean;
@@ -39,6 +45,7 @@ interface EditStockModalProps {
   industries: Industry[];
   purchases?: (Purchase | EnrichedPurchase)[];
   sales?: (Sale | EnrichedSale)[];
+  dividends?: Dividend[];
   stocks?: Stock[];
   onSave: (updatedStock: Stock) => Promise<void>;
   onUpdatePurchase?: (updatedPurchase: Purchase) => Promise<void>;
@@ -52,12 +59,13 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   industries,
   purchases = [],
   sales = [],
+  dividends = [],
   stocks = [],
   onSave,
   onUpdatePurchase,
   onUpdateSale,
 }) => {
-  const [activeTab, setActiveTab] = useState<'details' | 'analytics' | 'purchases' | 'sales'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'analytics' | 'purchases' | 'sales' | 'dividends'>('details');
 
   // Stock edit fields
   const [symbol, setSymbol] = useState('');
@@ -65,6 +73,8 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   const [companyName, setCompanyName] = useState('');
   const [industryId, setIndustryId] = useState('');
   const [dividendYield, setDividendYield] = useState('');
+  const [suggestedInvestment, setSuggestedInvestment] = useState('0');
+  const [capitalization, setCapitalization] = useState<StockCapitalization | ''>('');
   const [isSaving, setIsSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -82,6 +92,8 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
       setCompanyName(stock.CompanyName);
       setIndustryId(stock.IndustryId || industries[0]?.IndustryId || 'IND0002');
       setDividendYield((stock.DividendYield || 0).toString());
+      setSuggestedInvestment((stock.SuggestedInvestment || 0).toString());
+      setCapitalization(stock.Capitalization || '');
       setEditError(null);
     }
   }, [stock, industries, isOpen]);
@@ -117,6 +129,10 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   const sortedSales = [...stockSales].sort(
     (a, b) => new Date(b.SaleDate).getTime() - new Date(a.SaleDate).getTime()
   );
+  const stockDividends = dividends
+    .filter(dividend => dividend.StockId.trim().toUpperCase() === stock.StockId.trim().toUpperCase())
+    .sort((left, right) => right.Date.localeCompare(left.Date));
+  const totalDividendIncome = stockDividends.reduce((sum, dividend) => sum + dividend.TotalDividend, 0);
 
   // Purchase summary metrics
   const totalPurchasedQty = sortedPurchases.reduce((acc, p) => acc + (Number(p.Quantity) || 0), 0);
@@ -129,7 +145,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
   // Sales summary metrics
   const totalSoldQty = sortedSales.reduce((acc, s) => acc + (Number(s.Quantity) || 0), 0);
   const totalSaleProceeds = sortedSales.reduce(
-    (acc, s) => acc + (Number(s.TotalAmount) || (Number(s.Quantity) * Number(s.SalePrice || s.Rate || 0))),
+    (acc, s) => acc + (Number(s.TotalAmount) || (Number(s.Quantity) * Number(s.Rate || 0))),
     0
   );
 
@@ -160,6 +176,14 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
       setEditError('Company Name is required.');
       return;
     }
+    if (Number(suggestedInvestment) < 0 || !Number.isFinite(Number(suggestedInvestment))) {
+      setEditError('Suggested Investment must be a valid non-negative amount.');
+      return;
+    }
+    if (!STOCK_CAPITALIZATIONS.includes(capitalization as StockCapitalization)) {
+      setEditError('Select a capitalization category.');
+      return;
+    }
 
     // Check MktSymbol uniqueness across all other stocks
     const duplicateMkt = stocks.find(s => 
@@ -184,6 +208,8 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
         Liverate: stock.Liverate,
         CurrentPrice: stock.Liverate || stock.CurrentPrice,
         DividendYield: parseFloat(dividendYield) || 0,
+        SuggestedInvestment: Number(suggestedInvestment) || 0,
+        Capitalization: capitalization,
         LastUpdated: getTodayDateOnly(),
       };
 
@@ -314,6 +340,22 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 {sortedSales.length}
               </span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('dividends')}
+              className={`px-3.5 py-2.5 text-xs font-semibold rounded-t-xl transition flex items-center gap-2 border-b-2 cursor-pointer touch-manipulation min-h-[40px] whitespace-nowrap ${
+                activeTab === 'dividends'
+                  ? 'text-emerald-300 border-emerald-300 bg-slate-900'
+                  : 'text-slate-400 border-transparent hover:text-slate-200 hover:bg-slate-800/40'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Dividends</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold bg-slate-800 text-slate-400">
+                {stockDividends.length}
+              </span>
+            </button>
           </div>
 
           {/* TAB 1: Stock Details */}
@@ -437,6 +479,39 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                   placeholder="0.35"
                   className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-mono focus:outline-none focus:border-cyan-500"
                 />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Suggested Investment (₹ INR)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={suggestedInvestment}
+                    onChange={e => setSuggestedInvestment(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white font-mono focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    Capitalization <span className="text-cyan-400">*</span>
+                  </label>
+                  <select
+                    required
+                    value={capitalization}
+                    onChange={e => setCapitalization(e.target.value as StockCapitalization | '')}
+                    className="w-full min-h-[44px] bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-white focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="">Select capitalization</option>
+                    {STOCK_CAPITALIZATIONS.map(category => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
@@ -661,8 +736,48 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 </div>
               ) : (
                 <>
+                  <FinancialYearTree
+                    records={sortedPurchases}
+                    getKey={purchase => purchase.PurchaseId}
+                    getDate={purchase => purchase.PurchaseDate}
+                    getAmount={purchase => purchase.TotalAmount || purchase.Quantity * purchase.PurchasePrice}
+                    totalLabel="Total purchases"
+                    emptyMessage="No purchase records in a valid date range."
+                    exportFileName={`${stock.Symbol}-purchases`}
+                    exportColumns={[
+                      { header: 'Purchase ID', value: purchase => purchase.PurchaseId },
+                      { header: 'Stock ID', value: purchase => purchase.StockId },
+                      { header: 'Symbol', value: purchase => (purchase as EnrichedPurchase).symbol || stock.Symbol },
+                      { header: 'Date', value: purchase => purchase.PurchaseDate },
+                      { header: 'Quantity', value: purchase => purchase.Quantity },
+                      { header: 'Purchase Price', value: purchase => purchase.PurchasePrice },
+                      { header: 'Total Amount', value: purchase => purchase.TotalAmount },
+                      { header: 'Fees', value: purchase => purchase.Fees },
+                    ]}
+                    renderRecord={purchase => {
+                      const enriched = purchase as EnrichedPurchase;
+                      return (
+                        <div className="grid grid-cols-2 items-center gap-x-3 gap-y-2 px-3 py-3 sm:grid-cols-[minmax(115px,1fr)_repeat(3,minmax(90px,0.8fr))_auto] sm:px-4">
+                          <button type="button" onClick={() => handleOpenPurchaseEdit(purchase)} className="text-left text-xs font-semibold text-cyan-300 hover:underline">
+                            {purchase.PurchaseId}
+                          </button>
+                          <span className="text-right font-mono text-[11px] text-slate-300">Qty {purchase.Quantity}</span>
+                          <span className="text-right font-mono text-[11px] text-slate-300">Price {formatINR(purchase.PurchasePrice)}</span>
+                          <span className="text-right font-mono text-[11px] font-semibold text-emerald-300">{formatINR(purchase.TotalAmount || purchase.Quantity * purchase.PurchasePrice)}</span>
+                          <button type="button" onClick={() => handleOpenPurchaseEdit(purchase)} className="col-span-2 justify-self-end rounded-md border border-cyan-800/60 bg-cyan-950/60 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-300 hover:bg-cyan-900/60 sm:col-span-1">
+                            Edit
+                          </button>
+                          {enriched.remainingQuantity !== undefined && (
+                            <span className="col-span-2 text-[10px] text-slate-500 sm:col-span-full">
+                              Remaining {enriched.remainingQuantity} of {purchase.Quantity}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    }}
+                  />
                   {/* Desktop Table View */}
-                  <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
+                  <div className="hidden sm:hidden overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
                     <table className="w-full text-left text-xs border-collapse">
                       <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px] tracking-wider">
                         <tr>
@@ -737,7 +852,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                   </div>
 
                   {/* Mobile Card View */}
-                  <div className="block sm:hidden space-y-2.5">
+                  <div className="hidden sm:hidden space-y-2.5">
                     {sortedPurchases.map((p, idx) => {
                       const dateObj = new Date(p.PurchaseDate);
                       const dateStr = !isNaN(dateObj.getTime())
@@ -840,8 +955,41 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                 </div>
               ) : (
                 <>
+                  <FinancialYearTree
+                    records={sortedSales}
+                    getKey={sale => sale.SaleId || sale.SalesId}
+                    getDate={sale => sale.SaleDate}
+                    getAmount={sale => sale.TotalAmount || sale.Quantity * (sale.Rate ?? sale.SalePrice)}
+                    totalLabel="Total sales"
+                    emptyMessage="No sale records in a valid date range."
+                    exportFileName={`${stock.Symbol}-sales`}
+                    exportColumns={[
+                      { header: 'Sale ID', value: sale => sale.SaleId || sale.SalesId },
+                      { header: 'Purchase ID', value: sale => sale.PurchaseId },
+                      { header: 'Stock ID', value: sale => sale.StockId || stock.StockId },
+                      { header: 'Date', value: sale => sale.SaleDate },
+                      { header: 'Quantity', value: sale => sale.Quantity },
+                      { header: 'Sale Price', value: sale => sale.Rate ?? sale.SalePrice },
+                      { header: 'Total Amount', value: sale => sale.TotalAmount },
+                      { header: 'Fees', value: sale => sale.Fees },
+                      { header: 'Notes', value: sale => sale.Notes },
+                    ]}
+                    renderRecord={sale => (
+                      <div className="grid grid-cols-2 items-center gap-x-3 gap-y-2 px-3 py-3 sm:grid-cols-[minmax(115px,1fr)_repeat(3,minmax(90px,0.8fr))_auto] sm:px-4">
+                        <button type="button" onClick={() => handleOpenSaleEdit(sale)} className="text-left text-xs font-semibold text-amber-300 hover:underline">
+                          {sale.SaleId || sale.SalesId}
+                        </button>
+                        <span className="text-right font-mono text-[11px] text-slate-300">Qty {sale.Quantity}</span>
+                        <span className="text-right font-mono text-[11px] text-slate-300">Rate {formatINR(sale.Rate ?? sale.SalePrice)}</span>
+                        <span className="text-right font-mono text-[11px] font-semibold text-emerald-300">{formatINR(sale.TotalAmount || sale.Quantity * (sale.Rate ?? sale.SalePrice))}</span>
+                        <button type="button" onClick={() => handleOpenSaleEdit(sale)} className="col-span-2 justify-self-end rounded-md border border-amber-800/60 bg-amber-950/60 px-2.5 py-1.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-900/60 sm:col-span-1">
+                          Edit
+                        </button>
+                      </div>
+                    )}
+                  />
                   {/* Desktop Table View */}
-                  <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
+                  <div className="hidden sm:hidden overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
                     <table className="w-full text-left text-xs border-collapse">
                       <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 font-semibold uppercase text-[10px] tracking-wider">
                         <tr>
@@ -864,7 +1012,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                             : s.SaleDate;
 
                           const activeSaleId = s.SaleId || s.SalesId;
-                          const saleRate = s.SalePrice || s.Rate || 0;
+                          const saleRate =  s.Rate || 0;
                           const totalVal = s.TotalAmount || s.Quantity * saleRate;
 
                           return (
@@ -920,7 +1068,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                   </div>
 
                   {/* Mobile Card View */}
-                  <div className="block sm:hidden space-y-2.5">
+                  <div className="hidden sm:hidden space-y-2.5">
                     {sortedSales.map((s, idx) => {
                       const dateObj = new Date(s.SaleDate);
                       const dateStr = !isNaN(dateObj.getTime())
@@ -931,7 +1079,7 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                           })
                         : s.SaleDate;
                       const activeSaleId = s.SaleId || s.SalesId;
-                      const saleRate = s.SalePrice || s.Rate || 0;
+                      const saleRate =  s.Rate || 0;
                       const totalVal = s.TotalAmount || s.Quantity * saleRate;
 
                       return (
@@ -987,6 +1135,68 @@ export const EditStockModal: React.FC<EditStockModalProps> = ({
                     })}
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'dividends' && (
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+              <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                <div>
+                  <div className="text-[10px] text-slate-400">Dividend Records</div>
+                  <div className="mt-0.5 font-mono text-sm font-bold text-white">{stockDividends.length}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400">Total Dividend Income</div>
+                  <div className="mt-0.5 font-mono text-sm font-bold text-emerald-300">{formatINR(totalDividendIncome)}</div>
+                </div>
+              </div>
+
+              {stockDividends.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-800 bg-slate-950/40 p-8 text-center">
+                  <Receipt className="mx-auto mb-3 h-8 w-8 text-slate-500" />
+                  <p className="text-sm font-semibold text-slate-300">No dividends recorded</p>
+                  <p className="mt-1 text-xs text-slate-500">Import a dividend CSV from the dashboard to see records for {stock.Symbol} here.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex justify-end">
+                    <CsvExportButton
+                      fileName={`${stock.Symbol}-dividends`}
+                      records={stockDividends}
+                      columns={[
+                        { header: 'Dividend ID', value: dividend => dividend.DividendId },
+                        { header: 'Stock ID', value: dividend => dividend.StockId },
+                        { header: 'Date', value: dividend => dividend.Date },
+                        { header: 'Quantity', value: dividend => dividend.Quantity },
+                        { header: 'Per Share', value: dividend => dividend.PerStock },
+                        { header: 'Total Dividend', value: dividend => dividend.TotalDividend },
+                      ]}
+                    />
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40">
+                  <table className="w-full min-w-[560px] text-left text-xs">
+                    <thead className="border-b border-slate-800 bg-slate-900/90 text-[10px] font-semibold uppercase text-slate-400">
+                      <tr>
+                        <th className="px-4 py-3">Date</th>
+                        <th className="px-4 py-3 text-right">Quantity</th>
+                        <th className="px-4 py-3 text-right">Per Share</th>
+                        <th className="px-4 py-3 text-right">Total Dividend</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/70">
+                      {stockDividends.map(dividend => (
+                        <tr key={dividend.DividendId}>
+                          <td className="px-4 py-3 text-slate-300">{dividend.Date}</td>
+                          <td className="px-4 py-3 text-right font-mono text-slate-200">{dividend.Quantity.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono text-slate-200">{formatINR(dividend.PerStock)}</td>
+                          <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-300">{formatINR(dividend.TotalDividend)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  </div>
+                </div>
               )}
             </div>
           )}
