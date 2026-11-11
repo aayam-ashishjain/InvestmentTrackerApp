@@ -4,7 +4,9 @@
 
 The spreadsheet schema and fresh-workbook seed rows are defined in `src/types/database.ts` in `INVESTMENT_SHEET_SCHEMAS`. Spreadsheet creation and schema repair are implemented in `src/services/sheetsDatabase.ts`.
 
-The app searches the signed-in Google Drive for a spreadsheet named `InvestmentStockTracker`. If none exists, it creates a workbook with all schemas and their current seed rows. The seed data is sample/demo data, not a copy of another Gmail account's private spreadsheet.
+The app prompts the user to choose a Google account, then searches that account's Google Drive for a spreadsheet named `InvestmentStockTracker`. If none exists, it creates a workbook with all schemas and their current seed rows in that same account. The seed data is sample/demo data, not a copy of another Google account's private spreadsheet. The app does not sign in as or require access to the developer's Google account.
+
+The OAuth client ID in `google-oauth-config.json` identifies the application, not an individual user's Google account. When deploying, configure the OAuth consent screen and authorized origins for the app. If the consent screen is in testing mode, add each intended user as a test user or publish the app as appropriate.
 
 Each Google account has its own Drive and spreadsheet data. The app does not copy one account's real portfolio into another account, and real spreadsheet rows are intentionally not checked into this repository. To move real records between accounts, export the source sheets and import/copy those records into the new account's workbook.
 
@@ -67,8 +69,8 @@ CSV imports resolve the CSV `StockId` field against a stock's exact `StockId`, t
 
 ## Create and Migration Flow
 
-1. Google OAuth obtains an access token with Sheets and Drive scopes.
-2. `findInvestmentSpreadsheet` searches Drive for `InvestmentStockTracker`.
+1. The user selects a Google account and grants the app an access token with Sheets and Drive scopes.
+2. `findInvestmentSpreadsheet` searches the selected account's Drive for `InvestmentStockTracker`.
 3. `createInvestmentSpreadsheet` creates all sheet tabs from `INVESTMENT_SHEET_SCHEMAS`, writes headers and seed rows, then formats headers.
 4. `ensureRequiredSheets` creates missing tabs and appends supported new headers to existing Industry and Stocks tabs.
 5. `loadAllTables` reads the tabs, normalizes supported legacy header aliases, parses numbers/dates, and builds typed records.

@@ -21,7 +21,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSignIn, isLoading, err
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white">InvestmentStockTracker</h1>
-            <p className="text-xs text-slate-400">MEAN Stack & Google Sheets Relational Database</p>
+            <p className="text-xs text-slate-400">Your portfolio, stored in your Google Drive</p>
           </div>
         </div>
 
@@ -48,7 +48,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSignIn, isLoading, err
           </div>
 
           <div className="text-xs text-slate-400 leading-relaxed">
-            Connect your Google account with permission to automatically open or initialize the <strong className="text-slate-200">InvestmentStockTracker</strong> spreadsheet in your Google Drive.
+            Choose the Google account that owns your portfolio. After you grant access, the app connects to the <strong className="text-slate-200">InvestmentStockTracker</strong> spreadsheet in that account's Drive. If it does not exist yet, the app creates it in that same Drive.
           </div>
         </div>
 
@@ -79,7 +79,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSignIn, isLoading, err
                   <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
                   <path fill="none" d="M0 0h48v48H0z" />
                 </svg>
-                <span className="text-sm font-medium text-slate-800">Sign in with Google</span>
+                <span className="text-sm font-medium text-slate-800">Connect your Google Drive</span>
               </>
             )}
           </button>

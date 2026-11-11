@@ -1,118 +1,88 @@
-import googleOAuthConfig from '../../google-oauth-config.json';
-
 export interface GoogleUser {
   displayName: string;
   email: string;
   photoURL?: string;
 }
 
-interface OAuthTokenResponse {
-  access_token?: string;
-  error?: string;
-  error_description?: string;
+export interface SavedGoogleSession {
+  user: GoogleUser;
+  accessToken: string;
+  spreadsheetId?: string | null;
+  spreadsheetName?: string | null;
+  savedAt: number;
 }
 
-interface OAuthTokenClient {
-  requestAccessToken: (options?: { prompt?: string }) => void;
-}
+const GOOGLE_SESSION_STORAGE_KEY = 'investment-stock-tracker-google-session';
+const GOOGLE_BACKEND_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
 
-interface GoogleIdentityServices {
-  accounts: {
-    oauth2: {
-      initTokenClient: (options: {
-        client_id: string;
-        scope: string;
-        callback: (response: OAuthTokenResponse) => void;
-        error_callback: (error: { message?: string }) => void;
-      }) => OAuthTokenClient;
-      revoke: (token: string, callback: () => void) => void;
-    };
-  };
-}
+export function loadSavedGoogleSession(): SavedGoogleSession | null {
+  if (typeof window === 'undefined') return null;
 
-declare global {
-  interface Window {
-    google?: GoogleIdentityServices;
+  try {
+    const raw = window.localStorage.getItem(GOOGLE_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as SavedGoogleSession;
+    if (!parsed?.user || !parsed?.accessToken) return null;
+    return parsed;
+  } catch {
+    return null;
   }
 }
 
-const scopes = [
-  'openid',
-  'email',
-  'profile',
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.readonly',
-  'https://www.googleapis.com/auth/drive.file',
-].join(' ');
+export function saveGoogleSession(session: SavedGoogleSession): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(GOOGLE_SESSION_STORAGE_KEY, JSON.stringify({
+    ...session,
+    savedAt: Date.now(),
+  }));
+}
 
-let identityServicesPromise: Promise<void> | null = null;
+export function clearSavedGoogleSession(): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(GOOGLE_SESSION_STORAGE_KEY);
+}
 
-function loadGoogleIdentityServices(): Promise<void> {
-  if (window.google?.accounts.oauth2) return Promise.resolve();
+export function getGoogleAccessBlockedMessage(error: unknown): string {
+  const raw = typeof error === 'string'
+    ? error
+    : (error as { message?: string; error?: string; error_description?: string })?.message
+      || (error as { error?: string; error_description?: string })?.error_description
+      || (error as { error?: string })?.error
+      || 'Google sign-in failed';
 
-  if (!identityServicesPromise) {
-    identityServicesPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      script.onload = () => resolve();
-      script.onerror = () => {
-        identityServicesPromise = null;
-        reject(new Error('Could not load Google sign-in. Check your connection and try again.'));
-      };
-      document.head.appendChild(script);
-    });
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes('access blocked') || normalized.includes('verification process') || normalized.includes('not completed the google verification')) {
+    return 'Google is blocking this app because the OAuth app is not yet verified for external users. In Google Cloud Console, publish the app or add the account as a Test User.';
   }
 
-  return identityServicesPromise;
+  if (normalized.includes('origin_mismatch')) {
+    return 'Google rejected the sign-in because the app origin is not authorized. Add http://localhost:3000 and your deployed domain to the OAuth authorized JavaScript origins.';
+  }
+
+  if (normalized.includes('access_denied')) {
+    return 'Google denied access to the spreadsheet. Please choose an account with permission to the Google Sheets and Drive data.';
+  }
+
+  return raw || 'Google sign-in failed.';
 }
 
 export async function googleSignIn(): Promise<{ user: GoogleUser; accessToken: string }> {
-  if (!googleOAuthConfig.clientId) {
-    throw new Error('Google OAuth client ID is not configured.');
-  }
-
-  await loadGoogleIdentityServices();
-  const oauth = window.google?.accounts.oauth2;
-  if (!oauth) throw new Error('Google sign-in could not be initialized.');
-
-  const response = await new Promise<OAuthTokenResponse>((resolve, reject) => {
-    const tokenClient = oauth.initTokenClient({
-      client_id: googleOAuthConfig.clientId,
-      scope: scopes,
-      callback: result => {
-        if (result.error || !result.access_token) {
-          reject(new Error(result.error_description || result.error || 'Google sign-in did not return an access token.'));
-          return;
-        }
-        resolve(result);
-      },
-      error_callback: error => reject(new Error(error.message || 'Google sign-in was interrupted.')),
-    });
-    tokenClient.requestAccessToken({ prompt: 'consent' });
-  });
-
-  const accessToken = response.access_token!;
-  const profileResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const profile = profileResponse.ok
-    ? await profileResponse.json() as { name?: string; email?: string; picture?: string }
-    : {};
-
-  return {
-    accessToken,
-    user: {
-      displayName: profile.name || 'Investor',
-      email: profile.email || '',
-      photoURL: profile.picture,
-    },
-  };
+  const target = `${GOOGLE_BACKEND_BASE}/api/google/auth?returnTo=${encodeURIComponent(window.location.origin)}`;
+  window.location.href = target;
+  return { user: { displayName: 'Redirecting...', email: '' }, accessToken: '' };
 }
 
 export async function logout(accessToken: string | null): Promise<void> {
   if (!accessToken) return;
-  await loadGoogleIdentityServices();
-  window.google?.accounts.oauth2.revoke(accessToken, () => undefined);
+  try {
+    await fetch(`${GOOGLE_BACKEND_BASE}/api/google/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken }),
+    });
+  } catch {
+    // no-op: server-side logout is best effort
+  }
 }

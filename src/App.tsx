@@ -1,5 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { GoogleUser, googleSignIn, logout } from './services/googleOAuth';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import {
+  GoogleUser,
+  googleSignIn,
+  logout,
+  loadSavedGoogleSession,
+  saveGoogleSession,
+  clearSavedGoogleSession,
+  getGoogleAccessBlockedMessage,
+} from './services/googleOAuth';
 import { 
   findInvestmentSpreadsheet, 
   createInvestmentSpreadsheet, 
@@ -49,6 +57,7 @@ export default function App() {
   const [isInitializingSheet, setIsInitializingSheet] = useState<boolean>(false);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const hasInitializedAuthRef = useRef(false);
 
   // Relational Tables (Industry, Stocks as main table, Purchases as transaction table, Sales as sale ledger)
   const [industries, setIndustries] = useState<Industry[]>(DEFAULT_INDUSTRIES);
@@ -69,21 +78,15 @@ export default function App() {
     }, 4500);
   };
 
-  // Re-compute joined views whenever tables change
-  useEffect(() => {
-    if (stocks.length > 0) {
-      const joinedP = joinPurchasesWithStocks(purchases, stocks, industries, sales);
-      const joinedS = joinSalesWithPurchasesAndStocks(sales, purchases, stocks, industries);
-      const aggregatedS = aggregateStockHoldings(stocks, purchases, industries, sales);
-      setEnrichedPurchases(joinedP);
-      setEnrichedSales(joinedS);
-      setEnrichedStocks(aggregatedS);
-    } else {
-      setEnrichedPurchases([]);
-      setEnrichedSales([]);
-      setEnrichedStocks([]);
-    }
-  }, [stocks, purchases, sales, industries]);
+  const persistGoogleConnection = useCallback((activeUser: GoogleUser, accessTokenValue: string, sheetId?: string | null) => {
+    saveGoogleSession({
+      user: activeUser,
+      accessToken: accessTokenValue,
+      spreadsheetId: sheetId ?? spreadsheetId,
+      spreadsheetName: TRACKER_SPREADSHEET_NAME,
+      savedAt: Date.now(),
+    });
+  }, [spreadsheetId]);
 
   // Load or Create Google Sheet Database
   const setupSpreadsheet = useCallback(async (accessToken: string) => {
@@ -101,6 +104,9 @@ export default function App() {
       }
 
       setSpreadsheetId(sheet.id);
+      if (user) {
+        persistGoogleConnection(user, accessToken, sheet.id);
+      }
       await refreshData(accessToken, sheet.id);
     } catch (err: any) {
       console.error('Spreadsheet initialization error:', err);
@@ -108,7 +114,71 @@ export default function App() {
     } finally {
       setIsInitializingSheet(false);
     }
+  }, [persistGoogleConnection, user]);
+
+  useEffect(() => {
+    if (hasInitializedAuthRef.current) return;
+    hasInitializedAuthRef.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const callbackEmail = params.get('email');
+    const callbackName = params.get('display_name');
+    const callbackToken = params.get('access_token');
+    const callbackSpreadsheetId = params.get('spreadsheet_id');
+
+    if (callbackEmail && callbackToken) {
+      const userFromCallback: GoogleUser = {
+        displayName: callbackName || callbackEmail.split('@')[0] || 'Investor',
+        email: callbackEmail,
+      };
+
+      const nextUrl = new URL(window.location.href);
+      nextUrl.search = '';
+      window.history.replaceState({}, '', nextUrl);
+
+      setUser(userFromCallback);
+      setToken(callbackToken);
+      if (callbackSpreadsheetId) {
+        setSpreadsheetId(callbackSpreadsheetId);
+      }
+      saveGoogleSession({
+        user: userFromCallback,
+        accessToken: callbackToken,
+        spreadsheetId: callbackSpreadsheetId,
+        spreadsheetName: TRACKER_SPREADSHEET_NAME,
+        savedAt: Date.now(),
+      });
+      void setupSpreadsheet(callbackToken).catch(() => undefined);
+      return;
+    }
+
+    const savedSession = loadSavedGoogleSession();
+    if (!savedSession || !savedSession.user || !savedSession.accessToken) return;
+
+    setUser(savedSession.user);
+    setToken(savedSession.accessToken);
+    if (savedSession.spreadsheetId) {
+      setSpreadsheetId(savedSession.spreadsheetId);
+    }
+
+    void setupSpreadsheet(savedSession.accessToken).catch(() => undefined);
   }, []);
+
+  // Re-compute joined views whenever tables change
+  useEffect(() => {
+    if (stocks.length > 0) {
+      const joinedP = joinPurchasesWithStocks(purchases, stocks, industries, sales);
+      const joinedS = joinSalesWithPurchasesAndStocks(sales, purchases, stocks, industries);
+      const aggregatedS = aggregateStockHoldings(stocks, purchases, industries, sales);
+      setEnrichedPurchases(joinedP);
+      setEnrichedSales(joinedS);
+      setEnrichedStocks(aggregatedS);
+    } else {
+      setEnrichedPurchases([]);
+      setEnrichedSales([]);
+      setEnrichedStocks([]);
+    }
+  }, [stocks, purchases, sales, industries]);
 
   // Fetch all relational tables from Google Sheets
   const refreshData = async (accessToken: string, sheetId: string) => {
@@ -138,11 +208,12 @@ export default function App() {
       if (result) {
         setUser(result.user);
         setToken(result.accessToken);
+        persistGoogleConnection(result.user, result.accessToken, spreadsheetId);
         await setupSpreadsheet(result.accessToken);
       }
     } catch (err: any) {
       console.error('Login error:', err);
-      setAuthError(err.message || 'Failed to sign in with Google');
+      setAuthError(getGoogleAccessBlockedMessage(err) || err.message || 'Failed to sign in with Google');
     } finally {
       setIsAuthLoading(false);
     }
@@ -152,6 +223,7 @@ export default function App() {
     try {
       await logout(token);
     } finally {
+      clearSavedGoogleSession();
       setUser(null);
       setToken(null);
       setSpreadsheetId(null);
