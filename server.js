@@ -16,6 +16,7 @@ const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const ENCRYPTION_KEY = process.env.APP_ENCRYPTION_KEY || 'replace-this-with-a-32-byte-secret';
 const CONFIG_DIR = path.join(__dirname, 'config');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'investment-stock-tracker-config.enc');
+const DIST_PATH = path.join(__dirname, 'dist');
 
 const spreadsheetSchema = [
   { title: 'Industry', headers: ['IndustryId', 'Name', 'Suggested'] },
@@ -275,6 +276,14 @@ app.post('/api/google/logout', (_req, res) => {
 
   res.json({ ok: true });
 });
+
+if (fs.existsSync(DIST_PATH)) {
+  app.use(express.static(DIST_PATH));
+
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(DIST_PATH, 'index.html'));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`InvestmentStockTracker server running on http://localhost:${PORT}`);

@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: investment-stock-tracker
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: APP_URL
+        value: https://investment-stock-tracker.onrender.com
+      - key: VITE_API_BASE_URL
+        value: https://investment-stock-tracker.onrender.com
+      - key: GOOGLE_REDIRECT_URI
+        value: https://investment-stock-tracker.onrender.com/api/google/callback
+      - key: APP_ENCRYPTION_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
